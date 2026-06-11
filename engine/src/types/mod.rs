@@ -2,6 +2,7 @@ pub type Price  = i32;
 pub type Quantity = u32;
 pub type OrderId = u64;
 
+#[derive(Debug, Clone, Copy)]
 pub enum OrderType {
     GoodTillCancel,
     GoodForDay,
@@ -9,11 +10,13 @@ pub enum OrderType {
     FillOrKill,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum Side {
     Buy,
     Sell,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum OrderStatus {
     Cancelled,
     PartiallyFilled,
