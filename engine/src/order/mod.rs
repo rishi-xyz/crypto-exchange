@@ -63,4 +63,19 @@ impl Order {
     pub fn get_filled_quantity(&self) ->Quantity {
         return self.intial_quantity - self.remaining_quantity;
     }
+
+    pub fn is_filled(&self) ->bool {
+        return self.get_remaining_quantity() == 0;
+    }
+
+    pub fn fills(&mut self,quantity: Quantity) ->Result<(),String> {
+        if quantity > self.get_remaining_quantity() {
+            return  Err(format!(
+                "Order ({}) cannot be filled for more than its remaining quantity",
+                self.get_order_id()
+            ));
+        }
+        self.remaining_quantity -= quantity;
+        Ok(())
+    }
 }
