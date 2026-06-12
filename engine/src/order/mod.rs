@@ -1,3 +1,5 @@
+use std::{collections::VecDeque, sync::Arc};
+
 use crate::types::{OrderId, OrderStatus, OrderType, Price, Quantity, Side};
 
 pub struct Order {
@@ -79,3 +81,6 @@ impl Order {
         Ok(())
     }
 }
+
+pub type OrderPointer = Arc<Order>;
+pub type OrderPointers = VecDeque<OrderPointer>;
