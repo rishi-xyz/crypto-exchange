@@ -1,11 +1,21 @@
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
 use crate::types::{OrderId, Price, Quantity};
 
 pub struct TradeInfo {
     order_id: OrderId,
     price: Price,
-    qunatity: Quantity,
+    quantity: Quantity,
+}
+
+impl TradeInfo {
+    pub fn new(
+        order_id: OrderId,
+        price: Price,
+        quantity: Quantity
+    ) -> Self {
+        TradeInfo { order_id, price, quantity }
+    }
 }
 
 type TradeInfoPointer = Arc<TradeInfo>;
@@ -29,3 +39,5 @@ impl Trade {
         return self.ask_trade.clone();
     }
 }
+
+pub type Trades = VecDeque<Trade>; 
