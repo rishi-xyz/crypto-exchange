@@ -2,12 +2,18 @@ use std::{collections::VecDeque, sync::Arc};
 
 use crate::types::{Price, Quantity};
 
-struct LevelInfo {
+pub struct LevelInfo {
     price : Price,
     quantity : Quantity
 }
 
-type LevelInfos = Arc<VecDeque<LevelInfo>>;
+impl LevelInfo {
+    pub fn new(price:Price, quantity:Quantity) ->Self {
+        LevelInfo { price, quantity }
+    }
+}
+
+pub type LevelInfos = Arc<VecDeque<LevelInfo>>;
 pub struct OrderBookLevelInfo {
     bids : LevelInfos,
     asks : LevelInfos,

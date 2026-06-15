@@ -1,14 +1,15 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, sync::{Arc, Mutex}};
 
 use crate::types::{OrderId, OrderStatus, OrderType, Price, Quantity, Side};
 
+#[derive(Debug, Clone, Copy)]
 pub struct Order {
     order_id: OrderId,
     order_type: OrderType,
     side: Side,
     status: OrderStatus,
     price: Price,
-    intial_quantity: Quantity,
+    initial_quantity: Quantity,
     remaining_quantity: Quantity,
     timestamp: u64
 }
@@ -28,7 +29,7 @@ impl Order {
             side, 
             status, 
             price, 
-            intial_quantity: (quantity) , 
+            initial_quantity: (quantity) , 
             remaining_quantity: (quantity), 
             timestamp: (0) 
         };
@@ -55,7 +56,7 @@ impl Order {
     }
 
     pub fn get_initial_quantity(&self) ->Quantity {
-        return  self.intial_quantity
+        return  self.initial_quantity
     }
 
     pub fn get_remaining_quantity(&self) ->Quantity {
@@ -63,7 +64,7 @@ impl Order {
     }
 
     pub fn get_filled_quantity(&self) ->Quantity {
-        return self.intial_quantity - self.remaining_quantity;
+        return self.initial_quantity - self.remaining_quantity;
     }
 
     pub fn is_filled(&self) ->bool {
@@ -78,9 +79,14 @@ impl Order {
             ));
         }
         self.remaining_quantity -= quantity;
+        if self.remaining_quantity == 0 {
+            self.status = OrderStatus::Filled;    
+        }else {
+            self.status = OrderStatus::PartiallyFilled;   
+        }
         Ok(())
     }
 }
 
-pub type OrderPointer = Arc<Order>;
+pub type OrderPointer = Arc<Mutex<Order>>;
 pub type OrderPointers = VecDeque<OrderPointer>;
