@@ -23,3 +23,12 @@ pub enum OrderStatus {
     Filled,
     Empty,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Asset {
+    ETH,
+    SOL,
+    BTC,
+    USDC,
+    USDT
+}

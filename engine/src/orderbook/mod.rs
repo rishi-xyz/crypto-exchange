@@ -35,6 +35,13 @@ pub struct OrderBook {
 }
 
 impl OrderBook {
+    pub fn new() ->Self {
+        let bids_map: BTreeMap<Price, OrderPointers> = BTreeMap::new();
+        let asks_map: BTreeMap<Price, OrderPointers> = BTreeMap::new();
+        let orders_map: HashMap<OrderId, Order> = HashMap::new();
+        OrderBook { bids_map , asks_map, orders_map }
+    }
+
     fn can_match(&self, side: Side, price: Price) ->bool {
         match side {
             Side::Buy => {
