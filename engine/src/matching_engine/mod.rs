@@ -1,9 +1,10 @@
-use std::{collections::HashMap, fs::TryLockError::Error};
+use std::{collections::HashMap};
 
 use crate::{
     level_info::OrderBookLevelInfo, order::OrderPointer, order_modify::OrderModify, orderbook::OrderBook, trade::Trades, trading_pair::TradingPair, types::OrderId
 };
 
+#[derive(Debug)]
 pub struct Engine {
     orderbooks: HashMap<TradingPair,OrderBook>
 }
@@ -27,11 +28,7 @@ impl Engine {
     }
 
     pub fn cancel_order(&mut self, pair:&TradingPair, order_id: &OrderId) ->bool {
-        if let Some(book) = self.orderbooks.get_mut(pair) {
-            book.cancel_order(order_id);
-            return true
-        };
-        return false
+        self.orderbooks.get_mut(pair).map_or(false, |book| book.cancel_order(order_id))
     }
 
     pub fn modify_order(&mut self, pair:&TradingPair, modify_order:OrderModify) ->Option<Trades> {

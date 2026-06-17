@@ -28,6 +28,7 @@ use crate::{
     }
 };
 
+#[derive(Debug)]
 pub struct OrderBook {
     bids_map: BTreeMap<Price, OrderPointers>,
     asks_map: BTreeMap<Price,OrderPointers>,
@@ -132,10 +133,10 @@ impl OrderBook {
         return trades
     }
     
-    pub fn cancel_order(&mut self,order_id: &OrderId) ->() {
+    pub fn cancel_order(&mut self,order_id: &OrderId) ->bool {
         let order = match self.orders_map.remove(order_id){
             Some(order) => order,
-            None => return
+            None => return false
         };
         let price:Price = order.get_price();
         let side:Side = order.get_side();
@@ -153,6 +154,7 @@ impl OrderBook {
                 };
             }
         }
+        true
     }
     
     pub fn add_order(&mut self,order: OrderPointer) ->Option<Trades> {

@@ -2,9 +2,10 @@ use std::{collections::VecDeque, sync::Arc};
 
 use crate::types::{Price, Quantity};
 
+#[derive(Debug)]
 pub struct LevelInfo {
-    price : Price,
-    quantity : Quantity
+    pub price : Price,
+    pub quantity : Quantity
 }
 
 impl LevelInfo {
