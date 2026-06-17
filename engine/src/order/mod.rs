@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::{Arc, Mutex}};
+use std::{collections::VecDeque, sync::{Arc, Mutex}, time::{SystemTime, UNIX_EPOCH}};
 
 use crate::types::{OrderId, OrderStatus, OrderType, Price, Quantity, Side};
 
@@ -31,7 +31,7 @@ impl Order {
             price, 
             initial_quantity: (quantity) , 
             remaining_quantity: (quantity), 
-            timestamp: (0) 
+            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
         };
     }
     
@@ -85,6 +85,10 @@ impl Order {
             self.status = OrderStatus::PartiallyFilled;   
         }
         Ok(())
+    }
+
+    pub fn get_timestamp(&self) -> u64 {
+        self.timestamp
     }
 }
 

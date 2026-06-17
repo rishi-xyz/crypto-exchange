@@ -307,3 +307,17 @@ fn test_trade_info_fields() {
     let _ = ask.get_price();
     let _ = ask.get_quantity();
 }
+
+#[test]
+fn test_time_priority() {
+    let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
+    // Order A: buy 5@2000 (earlier)
+    place_limit(&mut engine, &pair, 1, Side::Buy, 2000, 5);
+    // Order B: buy 3@2000 (later, same price)
+    place_limit(&mut engine, &pair, 2, Side::Buy, 2000, 3);
+    // Order C: sell 10@2000 — must fill A (5) before B (3)
+    let trades = place_limit(&mut engine, &pair, 3, Side::Sell, 2000, 10).unwrap();
+    assert_eq!(trades.len(), 2);
+    // sell 2 remaining (10 - 5 - 3)
+    assert_eq!(engine.size(&pair), Some(1));
+}
