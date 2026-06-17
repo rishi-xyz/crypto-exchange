@@ -286,3 +286,24 @@ fn test_get_order_info_empty_pair() {
     let info = engine.get_order_info(&pair);
     assert!(info.is_some());
 }
+
+// ---------------------------------------------------------------------------
+// TradeInfo field access (ensures fields are "used" — no dead_code warning)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_trade_info_fields() {
+    let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
+    place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 5);
+    let trades = place_limit(&mut engine, &pair, 2, Side::Buy, 2000, 5).unwrap();
+    let trade = &trades[0];
+    let bid = trade.get_bid_trade_info();
+    let ask = trade.get_ask_trade_info();
+    // Read fields to suppress dead_code warnings
+    let _ = bid.get_order_id();
+    let _ = bid.get_price();
+    let _ = bid.get_quantity();
+    let _ = ask.get_order_id();
+    let _ = ask.get_price();
+    let _ = ask.get_quantity();
+}

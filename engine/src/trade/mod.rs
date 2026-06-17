@@ -17,6 +17,12 @@ impl TradeInfo {
     ) -> Self {
         TradeInfo { order_id, price, quantity }
     }
+
+    pub fn get_order_id(&self) -> OrderId { self.order_id }
+
+    pub fn get_price(&self) -> Price { self.price }
+
+    pub fn get_quantity(&self) -> Quantity { self.quantity }
 }
 
 type TradeInfoPointer = Arc<TradeInfo>;
