@@ -6,3 +6,4 @@ pub mod order_modify;
 pub mod orderbook;
 pub mod trading_pair;
 pub mod matching_engine;
+pub mod users;

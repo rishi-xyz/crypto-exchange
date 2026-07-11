@@ -1,21 +1,23 @@
 use std::{collections::VecDeque, sync::Arc};
 
-use crate::types::{OrderId, Price, Quantity};
+use crate::types::{OrderId, Price, Quantity, UserId};
 
 #[derive(Debug)]
 pub struct TradeInfo {
     order_id: OrderId,
     price: Price,
     quantity: Quantity,
+    user_id: UserId
 }
 
 impl TradeInfo {
     pub fn new(
         order_id: OrderId,
         price: Price,
-        quantity: Quantity
+        quantity: Quantity,
+        user_id: UserId
     ) -> Self {
-        TradeInfo { order_id, price, quantity }
+        TradeInfo { order_id, price, quantity, user_id }
     }
 
     pub fn get_order_id(&self) -> OrderId { self.order_id }
@@ -23,6 +25,8 @@ impl TradeInfo {
     pub fn get_price(&self) -> Price { self.price }
 
     pub fn get_quantity(&self) -> Quantity { self.quantity }
+
+    pub fn get_user_id(&self) -> UserId { self.user_id }
 }
 
 type TradeInfoPointer = Arc<TradeInfo>;

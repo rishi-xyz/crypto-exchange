@@ -5,8 +5,35 @@ use engine::{
     order::Order,
     order_modify::OrderModify,
     trading_pair::TradingPair,
-    types::{Asset, OrderStatus, OrderType, Side},
+    types::{Asset, OrderStatus, OrderType, Side, UserId},
+    users::User,
 };
+
+const USER_A: &str = "00000000-0000-0000-0000-000000000001";
+const USER_B: &str = "00000000-0000-0000-0000-000000000002";
+
+fn user_a() -> UserId {
+    UserId::parse_str(USER_A).unwrap()
+}
+
+fn user_b() -> UserId {
+    UserId::parse_str(USER_B).unwrap()
+}
+
+fn setup(pair: TradingPair) -> (Engine, TradingPair) {
+    let mut engine = Engine::new();
+    engine.add_trading_pair(pair);
+    engine.add_user(User::new(Some(user_a())));
+    engine.add_user(User::new(Some(user_b())));
+    // Give users plenty of balance
+    engine.deposit(user_a(), Asset::USDC, 10_000_000).unwrap();
+    engine.deposit(user_a(), Asset::ETH, 10_000).unwrap();
+    engine.deposit(user_a(), Asset::SOL, 10_000).unwrap();
+    engine.deposit(user_b(), Asset::USDC, 10_000_000).unwrap();
+    engine.deposit(user_b(), Asset::ETH, 10_000).unwrap();
+    engine.deposit(user_b(), Asset::SOL, 10_000).unwrap();
+    (engine, pair)
+}
 
 /// Helper: place a limit order and return the trades
 fn place_limit(
@@ -17,6 +44,7 @@ fn place_limit(
     price: i32,
     qty: u32,
 ) -> Option<engine::trade::Trades> {
+    let user = if id % 2 == 0 { user_a() } else { user_b() };
     let order = Arc::new(Mutex::new(Order::new(
         id,
         OrderType::GoodTillCancel,
@@ -24,11 +52,11 @@ fn place_limit(
         OrderStatus::Empty,
         price,
         qty,
+        user,
     )));
-    engine.add_order(pair, order)
+    engine.add_order(user, pair, order).ok()?
 }
 
-/// Helper: place a FaK order and return the trades
 fn place_fak(
     engine: &mut Engine,
     pair: &TradingPair,
@@ -37,6 +65,7 @@ fn place_fak(
     price: i32,
     qty: u32,
 ) -> Option<engine::trade::Trades> {
+    let user = if id % 2 == 0 { user_a() } else { user_b() };
     let order = Arc::new(Mutex::new(Order::new(
         id,
         OrderType::FillAndKill,
@@ -44,14 +73,13 @@ fn place_fak(
         OrderStatus::Empty,
         price,
         qty,
+        user,
     )));
-    engine.add_order(pair, order)
+    engine.add_order(user, pair, order).ok()?
 }
 
 fn new_engine(pair: TradingPair) -> (Engine, TradingPair) {
-    let mut engine = Engine::new();
-    engine.add_trading_pair(pair);
-    (engine, pair)
+    setup(pair)
 }
 
 // Limit order matching
@@ -106,7 +134,6 @@ fn test_multi_price_levels() {
     place_limit(&mut engine, &pair, 3, Side::Sell, 1800, 2);
 
     // Buy 10@2000 — should match all levels from best ask upward
-    // Best ask = 1800 (2), then 1900 (3), then 2000 (5) = 10 total
     let trades = place_limit(&mut engine, &pair, 4, Side::Buy, 2000, 10);
     assert_eq!(trades.as_ref().unwrap().len(), 3, "three matches expected");
     assert_eq!(engine.size(&pair), Some(0), "all filled");
@@ -152,7 +179,7 @@ fn test_cancel_filled_order_return_false() {
 fn test_modify_nonexistent_order() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    let modify = OrderModify::new(99, 2000, Side::Buy, 5, OrderStatus::Empty);
+    let modify = OrderModify::new(99, 2000, Side::Buy, 5, OrderStatus::Empty, user_a());
     assert!(engine.modify_order(&pair, modify).is_none());
 }
 
@@ -166,7 +193,7 @@ fn test_modify_triggers_match() {
     place_limit(&mut engine, &pair, 2, Side::Sell, 2100, 10);
 
     // Modify sell to 1900 — should trigger match
-    let modify = OrderModify::new(2, 1900, Side::Sell, 10, OrderStatus::Empty);
+    let modify = OrderModify::new(2, 1900, Side::Sell, 10, OrderStatus::Empty, user_b());
     let trades = engine.modify_order(&pair, modify);
     assert_eq!(trades.as_ref().unwrap().len(), 1, "one trade from modify");
     assert_eq!(engine.size(&pair), Some(1), "sell has 7 left");
@@ -217,6 +244,14 @@ fn test_multiple_pairs_independent() {
     let sol = TradingPair::new(Asset::SOL, Asset::USDC);
     engine.add_trading_pair(eth);
     engine.add_trading_pair(sol);
+    engine.add_user(User::new(Some(user_a())));
+    engine.add_user(User::new(Some(user_b())));
+    engine.deposit(user_a(), Asset::USDC, 10_000_000).unwrap();
+    engine.deposit(user_a(), Asset::ETH, 10_000).unwrap();
+    engine.deposit(user_a(), Asset::SOL, 10_000).unwrap();
+    engine.deposit(user_b(), Asset::USDC, 10_000_000).unwrap();
+    engine.deposit(user_b(), Asset::ETH, 10_000).unwrap();
+    engine.deposit(user_b(), Asset::SOL, 10_000).unwrap();
 
     // Place orders on ETH
     place_limit(&mut engine, &eth, 1, Side::Sell, 2000, 5);
@@ -276,8 +311,6 @@ fn test_new_pair_has_no_orders() {
 #[test]
 fn test_get_order_info_empty_pair() {
     let (engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
-    // Can't use new_engine because it returns (Engine, Pair) and engine is mut...
-    // Just create a new one
     let _ = engine;
     let _ = pair;
     let mut engine = Engine::new();
@@ -288,7 +321,7 @@ fn test_get_order_info_empty_pair() {
 }
 
 // ---------------------------------------------------------------------------
-// TradeInfo field access (ensures fields are "used" — no dead_code warning)
+// TradeInfo field access
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -299,13 +332,14 @@ fn test_trade_info_fields() {
     let trade = &trades[0];
     let bid = trade.get_bid_trade_info();
     let ask = trade.get_ask_trade_info();
-    // Read fields to suppress dead_code warnings
     let _ = bid.get_order_id();
     let _ = bid.get_price();
     let _ = bid.get_quantity();
+    let _ = bid.get_user_id();
     let _ = ask.get_order_id();
     let _ = ask.get_price();
     let _ = ask.get_quantity();
+    let _ = ask.get_user_id();
 }
 
 #[test]

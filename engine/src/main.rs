@@ -5,7 +5,8 @@ use engine::{
     order::Order,
     order_modify::OrderModify,
     trading_pair::TradingPair,
-    types::{Asset, OrderId, OrderStatus, OrderType, Price, Quantity, Side},
+    types::{Asset, OrderId, OrderStatus, OrderType, Price, Quantity, Side, UserId},
+    users::User,
 };
 
 fn print_separator(label: &str) {
@@ -19,20 +20,36 @@ fn print_book(engine: &Engine, pair: &TradingPair, label: &str) {
         info.as_ref().map(|i| i.get_asks()));
 }
 
-fn place(engine: &mut Engine, pair: &TradingPair, id: OrderId, side: Side, price: Price, qty: Quantity) {
-    let order = Arc::new(Mutex::new(Order::new(
-        id, OrderType::GoodTillCancel, side, OrderStatus::Empty, price, qty,
-    )));
-    let trades = engine.add_order(pair, order);
-    println!("  Place {} {}@{} → trades: {:?}", if matches!(side, Side::Buy) { "BUY" } else { "SELL" }, qty, price, trades.as_ref().map(|t| t.len()));
+fn print_balances(engine: &Engine, user_id: &UserId, label: &str) {
+    if let Some(balances) = engine.get_user_balance(user_id) {
+        println!("  {} balances: {:?}", label, balances);
+    }
 }
 
-fn place_fak(engine: &mut Engine, pair: &TradingPair, id: OrderId, side: Side, price: Price, qty: Quantity) {
+fn place(engine: &mut Engine, user_id: UserId, pair: &TradingPair, id: OrderId, side: Side, price: Price, qty: Quantity) {
     let order = Arc::new(Mutex::new(Order::new(
-        id, OrderType::FillAndKill, side, OrderStatus::Empty, price, qty,
+        id, OrderType::GoodTillCancel, side, OrderStatus::Empty, price, qty, user_id,
     )));
-    let trades = engine.add_order(pair, order);
-    println!("  Place FAK {} {}@{} → trades: {:?}", if matches!(side, Side::Buy) { "BUY" } else { "SELL" }, qty, price, trades.as_ref().map(|t| t.len()));
+    match engine.add_order(user_id, pair, order) {
+        Ok(trades) => println!("  Place {} {}@{} → trades: {}",
+            if side == Side::Buy { "BUY" } else { "SELL" }, qty, price,
+            trades.as_ref().map(|t| t.len()).unwrap_or(0)),
+        Err(e) => println!("  Place {} {}@{} → rejected: {}",
+            if side == Side::Buy { "BUY" } else { "SELL" }, qty, price, e),
+    }
+}
+
+fn place_fak(engine: &mut Engine, user_id: UserId, pair: &TradingPair, id: OrderId, side: Side, price: Price, qty: Quantity) {
+    let order = Arc::new(Mutex::new(Order::new(
+        id, OrderType::FillAndKill, side, OrderStatus::Empty, price, qty, user_id,
+    )));
+    match engine.add_order(user_id, pair, order) {
+        Ok(trades) => println!("  Place FAK {} {}@{} → trades: {}",
+            if side == Side::Buy { "BUY" } else { "SELL" }, qty, price,
+            trades.as_ref().map(|t| t.len()).unwrap_or(0)),
+        Err(e) => println!("  Place FAK {} {}@{} → rejected: {}",
+            if side == Side::Buy { "BUY" } else { "SELL" }, qty, price, e),
+    }
 }
 
 fn main() {
@@ -42,75 +59,102 @@ fn main() {
     engine.add_trading_pair(eth_usdc);
     engine.add_trading_pair(sol_usdc);
 
+    // Create users with initial balances
+    let alice = UserId::new_v4();
+    let bob = UserId::new_v4();
+    engine.add_user(User::new(Some(alice)));
+    engine.add_user(User::new(Some(bob)));
+    engine.deposit(alice, Asset::USDC, 100_000).unwrap();
+    engine.deposit(bob, Asset::ETH, 50).unwrap();
+    engine.deposit(bob, Asset::SOL, 200).unwrap();
+
     // ============================================================================
-    print_separator("1. Basic match — sell 10, buy 5 at same price (partial fill)");
+    print_separator("Initial balances");
     // ============================================================================
-    place(&mut engine, &eth_usdc, 1, Side::Sell, 2000, 10);
-    place(&mut engine, &eth_usdc, 2, Side::Buy, 2000, 5);
+    print_balances(&engine, &alice, "Alice");
+    print_balances(&engine, &bob, "Bob");
+
+    // ============================================================================
+    print_separator("1. Basic match — Bob sells 10 ETH, Alice buys 5 (partial fill)");
+    // ============================================================================
+    place(&mut engine, bob, &eth_usdc, 1, Side::Sell, 2000, 10);
+    place(&mut engine, alice, &eth_usdc, 2, Side::Buy, 2000, 5);
     print_book(&engine, &eth_usdc, "After test 1");
     println!("  Orders remaining: {:?}", engine.size(&eth_usdc));
+    print_balances(&engine, &alice, "Alice");
+    print_balances(&engine, &bob, "Bob");
 
     // ============================================================================
-    print_separator("2. No match — buy below best ask");
+    print_separator("2. No match — Alice buys below best ask");
     // ============================================================================
-    place(&mut engine, &eth_usdc, 3, Side::Buy, 1900, 3);
+    place(&mut engine, alice, &eth_usdc, 3, Side::Buy, 1900, 3);
     print_book(&engine, &eth_usdc, "After test 2");
-    println!("  Orders remaining: {:?}", engine.size(&eth_usdc));
+    print_balances(&engine, &alice, "Alice");
 
     // ============================================================================
-    print_separator("3. Full fill remaining — buy to match the remaining 5 sell");
+    print_separator("3. Full fill remaining — Alice buys remaining 5 ETH");
     // ============================================================================
-    place(&mut engine, &eth_usdc, 4, Side::Buy, 2000, 5);
+    place(&mut engine, alice, &eth_usdc, 4, Side::Buy, 2000, 5);
     print_book(&engine, &eth_usdc, "After test 3");
     println!("  Orders remaining: {:?}", engine.size(&eth_usdc));
+    print_balances(&engine, &alice, "Alice");
+    print_balances(&engine, &bob, "Bob");
 
     // ============================================================================
     print_separator("4. Cancel order");
     // ============================================================================
-    place(&mut engine, &eth_usdc, 5, Side::Sell, 2100, 8);
+    place(&mut engine, bob, &eth_usdc, 5, Side::Sell, 2100, 8);
     print_book(&engine, &eth_usdc, "Before cancel");
     println!("  Orders before cancel: {:?}", engine.size(&eth_usdc));
     let cancelled = engine.cancel_order(&eth_usdc, &5);
     println!("  Cancel returned: {}", cancelled);
     print_book(&engine, &eth_usdc, "After cancel");
     println!("  Orders after cancel: {:?}", engine.size(&eth_usdc));
+    print_balances(&engine, &bob, "Bob (after cancel)");
 
     // ============================================================================
     print_separator("5. Modify order — change price to trigger match");
     // ============================================================================
-    place(&mut engine, &eth_usdc, 6, Side::Sell, 2100, 10);
+    place(&mut engine, bob, &eth_usdc, 6, Side::Sell, 2100, 10);
     print_book(&engine, &eth_usdc, "Before modify");
     println!("  Orders before modify: {:?}", engine.size(&eth_usdc));
-    let modify = OrderModify::new(6, 1900, Side::Sell, 10, OrderStatus::Empty);
+    let modify = OrderModify::new(6, 1900, Side::Sell, 10, OrderStatus::Empty, bob);
     let mod_trades = engine.modify_order(&eth_usdc, modify);
     println!("  Modify trades: {:?}", mod_trades.as_ref().map(|t| t.len()));
     print_book(&engine, &eth_usdc, "After modify");
     println!("  Orders after modify: {:?}", engine.size(&eth_usdc));
+    print_balances(&engine, &alice, "Alice (after modify)");
+    print_balances(&engine, &bob, "Bob (after modify)");
 
     // ============================================================================
     print_separator("6. FillAndKill — can't match (buy below best ask)");
     // ============================================================================
-    place_fak(&mut engine, &eth_usdc, 7, Side::Buy, 1800, 2);
+    place_fak(&mut engine, alice, &eth_usdc, 7, Side::Buy, 1800, 2);
     print_book(&engine, &eth_usdc, "After test 6");
     println!("  Orders: {:?}", engine.size(&eth_usdc));
+    print_balances(&engine, &alice, "Alice (FAK rejected)");
 
     // ============================================================================
     print_separator("7. FillAndKill — matches fully");
     // ============================================================================
-    place_fak(&mut engine, &eth_usdc, 8, Side::Buy, 1900, 2);
+    place_fak(&mut engine, alice, &eth_usdc, 8, Side::Buy, 1900, 2);
     print_book(&engine, &eth_usdc, "After test 7");
     println!("  Orders: {:?}", engine.size(&eth_usdc));
+    print_balances(&engine, &alice, "Alice (FAK filled)");
+    print_balances(&engine, &bob, "Bob (FAK filled)");
 
     // ============================================================================
     print_separator("8. Multiple trading pairs (SOL/USDC)");
     // ============================================================================
-    place(&mut engine, &sol_usdc, 101, Side::Sell, 100, 20);
-    place(&mut engine, &sol_usdc, 102, Side::Buy, 100, 10);
-    place(&mut engine, &sol_usdc, 103, Side::Buy, 105, 5);
+    place(&mut engine, bob, &sol_usdc, 101, Side::Sell, 100, 20);
+    place(&mut engine, alice, &sol_usdc, 102, Side::Buy, 100, 10);
+    place(&mut engine, alice, &sol_usdc, 103, Side::Buy, 105, 5);
     print_book(&engine, &sol_usdc, "SOL/USDC book");
     print_book(&engine, &eth_usdc, "ETH/USDC book");
     println!("  SOL pair orders: {:?}", engine.size(&sol_usdc));
     println!("  ETH pair orders (should be unchanged): {:?}", engine.size(&eth_usdc));
+    print_balances(&engine, &alice, "Alice (multi-pair)");
+    print_balances(&engine, &bob, "Bob (multi-pair)");
 
     // ============================================================================
     print_separator("9. Remove trading pair");

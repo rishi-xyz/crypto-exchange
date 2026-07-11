@@ -1,6 +1,5 @@
 use std::{collections::VecDeque, sync::{Arc, Mutex}, time::{SystemTime, UNIX_EPOCH}};
-
-use crate::types::{OrderId, OrderStatus, OrderType, Price, Quantity, Side};
+use crate::types::{OrderId, OrderStatus, OrderType, Price, Quantity, Side, UserId};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Order {
@@ -11,7 +10,8 @@ pub struct Order {
     price: Price,
     initial_quantity: Quantity,
     remaining_quantity: Quantity,
-    timestamp: u64
+    timestamp: u64,
+    user_id: UserId
 }
 
 impl Order {
@@ -22,6 +22,7 @@ impl Order {
         status: OrderStatus,
         price: Price,
         quantity: Quantity,
+        user_id: UserId
     ) ->Self {
         return Self { 
             order_id, 
@@ -31,7 +32,8 @@ impl Order {
             price, 
             initial_quantity: (quantity) , 
             remaining_quantity: (quantity), 
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
+            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64,
+            user_id
         };
     }
     
@@ -89,6 +91,10 @@ impl Order {
 
     pub fn get_timestamp(&self) -> u64 {
         self.timestamp
+    }
+
+    pub fn get_user_id(&self) -> UserId {
+        self.user_id
     }
 }
 

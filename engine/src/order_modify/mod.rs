@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{order::Order, types::{OrderId, OrderStatus, OrderType, Price, Quantity, Side}};
+use crate::{order::Order, types::{OrderId, OrderStatus, OrderType, Price, Quantity, Side, UserId}};
 
 pub struct OrderModify {
     order_id: OrderId,
@@ -8,6 +8,7 @@ pub struct OrderModify {
     side: Side,
     quantity: Quantity,
     status: OrderStatus,
+    user_id: UserId
 }
 
 impl OrderModify {
@@ -16,9 +17,10 @@ impl OrderModify {
         price: Price,
         side: Side,
         quantity: Quantity,
-        status: OrderStatus
+        status: OrderStatus,
+        user_id: UserId
     ) ->Self {
-        return Self { order_id, price, side, quantity, status };
+        return Self { order_id, price, side, quantity, status, user_id };
     }   
 
     pub fn get_order_id(&self) ->OrderId {
@@ -40,7 +42,11 @@ impl OrderModify {
         return  self.status
     }
 
+    pub fn get_user_id(&self) ->UserId {
+        return  self.user_id
+    }
+
     pub fn to_order_pointer(&self,order_type: OrderType) ->Arc<Order>{
-        return Arc::new(Order::new(self.order_id, order_type, self.side, self.status, self.price, self.quantity));
+        return Arc::new(Order::new(self.order_id, order_type, self.side, self.status, self.price, self.quantity, self.user_id));
     }
 }

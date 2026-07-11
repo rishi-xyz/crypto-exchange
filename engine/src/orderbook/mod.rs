@@ -20,11 +20,7 @@ use crate::{
         TradeInfo, 
         Trades
     }, types::{
-        OrderId, 
-        OrderType, 
-        Price, 
-        Quantity, 
-        Side
+        OrderId, OrderType, Price, Quantity, Side, UserId
     }
 };
 
@@ -82,12 +78,14 @@ impl OrderBook {
                 let _ = bid.fills(quantity);
                 let _ = ask.fills(quantity);
 
-                let bid_filled:bool = bid.is_filled();
-                let ask_filled:bool = ask.is_filled();
-                let bid_id:OrderId = bid.get_order_id();
-                let ask_id:OrderId = ask.get_order_id();
-                let bid_price:Price = bid.get_price();
-                let ask_price:Price = ask.get_price();
+                let bid_filled: bool = bid.is_filled();
+                let ask_filled: bool = ask.is_filled();
+                let bid_id: OrderId = bid.get_order_id();
+                let ask_id: OrderId = ask.get_order_id();
+                let bid_price: Price = bid.get_price();
+                let ask_price: Price = ask.get_price();
+                let bid_user_id: UserId = bid.get_user_id();
+                let ask_user_id: UserId = ask.get_user_id();
 
                 drop(bid);
                 drop(ask);
@@ -101,8 +99,8 @@ impl OrderBook {
                     self.orders_map.remove(&ask_id);
                 }
                 trades.push_back(Trade::new(
-                    Arc::new(TradeInfo::new(bid_id, bid_price, quantity)),
-                    Arc::new(TradeInfo::new(ask_id, ask_price, quantity)),
+                    Arc::new(TradeInfo::new(bid_id, bid_price, quantity,bid_user_id)),
+                    Arc::new(TradeInfo::new(ask_id, ask_price, quantity,ask_user_id)),
                 ));
             }
             if bids.is_empty(){
@@ -119,7 +117,7 @@ impl OrderBook {
                 let order = bids.front().unwrap().lock().unwrap();
                 (order.get_type() == OrderType::FillAndKill,order.get_order_id())
             };
-            if is_fak { self.cancel_order(&order_id); }
+            if is_fak { let _ = self.cancel_order(&order_id); }
         }
         if !self.asks_map.is_empty() {
             let ask_price:Price = *self.asks_map.first_key_value().unwrap().0;
@@ -128,16 +126,13 @@ impl OrderBook {
                 let order = asks.front().unwrap().lock().unwrap();
                 (order.get_type() == OrderType::FillAndKill,order.get_order_id())
             };
-            if is_fak { self.cancel_order(&order_id); }
+            if is_fak { let _ = self.cancel_order(&order_id); }
         }
         return trades
     }
     
-    pub fn cancel_order(&mut self,order_id: &OrderId) ->bool {
-        let order = match self.orders_map.remove(order_id){
-            Some(order) => order,
-            None => return false
-        };
+    pub fn cancel_order(&mut self,order_id: &OrderId) ->Option<Order> {
+        let order = self.orders_map.remove(order_id)?;
         let price:Price = order.get_price();
         let side:Side = order.get_side();
 
@@ -154,7 +149,7 @@ impl OrderBook {
                 };
             }
         }
-        true
+        Some(order)
     }
     
     pub fn add_order(&mut self,order: OrderPointer) ->Option<Trades> {
@@ -192,13 +187,22 @@ impl OrderBook {
             order_modify.get_status(),
             order_modify.get_price(),
             order_modify.get_quantity(),
+            order_modify.get_user_id()
         )));
-        self.cancel_order(&order_id);
+        let _ = self.cancel_order(&order_id);
         self.add_order(new_order)
     }
     
     pub fn size(&self) -> usize  {
         return self.orders_map.len()
+    }
+
+    pub fn has_order(&self, order_id: &OrderId) -> bool {
+        self.orders_map.contains_key(order_id)
+    }
+
+    pub fn get_order_type(&self, order_id: &OrderId) -> Option<OrderType> {
+        self.orders_map.get(order_id).map(|o| o.get_type())
     }
     
     pub fn get_order_info(&self) ->OrderBookLevelInfo {
