@@ -25,7 +25,6 @@ fn setup(pair: TradingPair) -> (Engine, TradingPair) {
     engine.add_trading_pair(pair);
     engine.add_user(User::new(Some(user_a())));
     engine.add_user(User::new(Some(user_b())));
-    // Give users plenty of balance
     engine.deposit(user_a(), Asset::USDC, 10_000_000).unwrap();
     engine.deposit(user_a(), Asset::ETH, 10_000).unwrap();
     engine.deposit(user_a(), Asset::SOL, 10_000).unwrap();
@@ -35,18 +34,17 @@ fn setup(pair: TradingPair) -> (Engine, TradingPair) {
     (engine, pair)
 }
 
-/// Helper: place a limit order and return the trades
+/// Helper: place a limit order and return the result
 fn place_limit(
     engine: &mut Engine,
     pair: &TradingPair,
-    id: u64,
+    user: UserId,
     side: Side,
     price: i32,
     qty: u32,
-) -> Option<engine::trade::Trades> {
-    let user = if id % 2 == 0 { user_a() } else { user_b() };
+) -> Option<engine::matching_engine::AddOrderResult> {
     let order = Arc::new(Mutex::new(Order::new(
-        id,
+        0,
         OrderType::GoodTillCancel,
         side,
         OrderStatus::Empty,
@@ -60,14 +58,13 @@ fn place_limit(
 fn place_fak(
     engine: &mut Engine,
     pair: &TradingPair,
-    id: u64,
+    user: UserId,
     side: Side,
     price: i32,
     qty: u32,
-) -> Option<engine::trade::Trades> {
-    let user = if id % 2 == 0 { user_a() } else { user_b() };
+) -> Option<engine::matching_engine::AddOrderResult> {
     let order = Arc::new(Mutex::new(Order::new(
-        id,
+        0,
         OrderType::FillAndKill,
         side,
         OrderStatus::Empty,
@@ -88,14 +85,12 @@ fn new_engine(pair: TradingPair) -> (Engine, TradingPair) {
 fn test_basic_limit_match() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    // Sell 10@2000 — no bids, no trade
-    let trades = place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 10);
-    assert!(trades.unwrap().is_empty(), "no bids yet");
+    let sell = place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 10);
+    assert!(sell.as_ref().unwrap().trades.as_ref().unwrap().is_empty(), "no bids yet");
     assert_eq!(engine.size(&pair), Some(1));
 
-    // Buy 5@2000 — matches 5 of 10
-    let trades = place_limit(&mut engine, &pair, 2, Side::Buy, 2000, 5);
-    assert_eq!(trades.as_ref().unwrap().len(), 1, "one trade expected");
+    let buy = place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 5);
+    assert_eq!(buy.as_ref().unwrap().trades.as_ref().unwrap().len(), 1, "one trade expected");
     assert_eq!(engine.size(&pair), Some(1), "sell 5 remaining");
 }
 
@@ -103,13 +98,10 @@ fn test_basic_limit_match() {
 fn test_full_fill() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    // Sell 10@2000
-    place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 10);
-    // Buy 5@2000 — partial
-    place_limit(&mut engine, &pair, 2, Side::Buy, 2000, 5);
-    // Buy 5@2000 — fills the rest
-    let trades = place_limit(&mut engine, &pair, 3, Side::Buy, 2000, 5);
-    assert_eq!(trades.as_ref().unwrap().len(), 1);
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 10);
+    place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 5);
+    let result = place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 5);
+    assert_eq!(result.as_ref().unwrap().trades.as_ref().unwrap().len(), 1);
     assert_eq!(engine.size(&pair), Some(0), "all orders filled");
 }
 
@@ -117,10 +109,9 @@ fn test_full_fill() {
 fn test_no_match_below_ask() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 10);
-    // Buy at 1900 < best ask 2000 → no match
-    let trades = place_limit(&mut engine, &pair, 2, Side::Buy, 1900, 3);
-    assert!(trades.unwrap().is_empty(), "should not match");
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 10);
+    let buy = place_limit(&mut engine, &pair, user_a(), Side::Buy, 1900, 3);
+    assert!(buy.as_ref().unwrap().trades.as_ref().unwrap().is_empty(), "should not match");
     assert_eq!(engine.size(&pair), Some(2), "both orders resting");
 }
 
@@ -128,14 +119,12 @@ fn test_no_match_below_ask() {
 fn test_multi_price_levels() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    // Sell 5@2000, 3@1900, 2@1800
-    place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 5);
-    place_limit(&mut engine, &pair, 2, Side::Sell, 1900, 3);
-    place_limit(&mut engine, &pair, 3, Side::Sell, 1800, 2);
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 5);
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 1900, 3);
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 1800, 2);
 
-    // Buy 10@2000 — should match all levels from best ask upward
-    let trades = place_limit(&mut engine, &pair, 4, Side::Buy, 2000, 10);
-    assert_eq!(trades.as_ref().unwrap().len(), 3, "three matches expected");
+    let buy = place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 10);
+    assert_eq!(buy.as_ref().unwrap().trades.as_ref().unwrap().len(), 3, "three matches expected");
     assert_eq!(engine.size(&pair), Some(0), "all filled");
 }
 
@@ -145,12 +134,10 @@ fn test_multi_price_levels() {
 fn test_cancel_resting_order() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    // Buy below ask so they don't cross — both rest
-    place_limit(&mut engine, &pair, 1, Side::Buy, 1900, 5);
-    place_limit(&mut engine, &pair, 2, Side::Sell, 2000, 10);
+    let buy = place_limit(&mut engine, &pair, user_a(), Side::Buy, 1900, 5).unwrap();
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 10);
 
-    // Cancel the buy
-    assert!(engine.cancel_order(&pair, &1), "cancel should succeed");
+    assert!(engine.cancel_order(&pair, &buy.order_id), "cancel should succeed");
     assert_eq!(engine.size(&pair), Some(1), "only sell remains");
 }
 
@@ -165,12 +152,11 @@ fn test_cancel_nonexistent_order() {
 fn test_cancel_filled_order_return_false() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 5);
-    place_limit(&mut engine, &pair, 2, Side::Buy, 2000, 5);
+    let sell = place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 5).unwrap();
+    let buy = place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 5).unwrap();
 
-    // Both orders filled — trying to cancel either returns false
-    assert!(!engine.cancel_order(&pair, &1), "order 1 gone");
-    assert!(!engine.cancel_order(&pair, &2), "order 2 gone");
+    assert!(!engine.cancel_order(&pair, &sell.order_id), "order 1 gone");
+    assert!(!engine.cancel_order(&pair, &buy.order_id), "order 2 gone");
 }
 
 // Modify
@@ -187,15 +173,12 @@ fn test_modify_nonexistent_order() {
 fn test_modify_triggers_match() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    // Buy 3@1900 resting
-    place_limit(&mut engine, &pair, 1, Side::Buy, 1900, 3);
-    // Place sell at a higher price so it doesn't match
-    place_limit(&mut engine, &pair, 2, Side::Sell, 2100, 10);
+    place_limit(&mut engine, &pair, user_a(), Side::Buy, 1900, 3);
+    let sell = place_limit(&mut engine, &pair, user_b(), Side::Sell, 2100, 10).unwrap();
 
-    // Modify sell to 1900 — should trigger match
-    let modify = OrderModify::new(2, 1900, Side::Sell, 10, OrderStatus::Empty, user_b());
-    let trades = engine.modify_order(&pair, modify);
-    assert_eq!(trades.as_ref().unwrap().len(), 1, "one trade from modify");
+    let modify = OrderModify::new(sell.order_id, 1900, Side::Sell, 10, OrderStatus::Empty, user_b());
+    let result = engine.modify_order(&pair, modify);
+    assert_eq!(result.as_ref().unwrap().trades.as_ref().unwrap().len(), 1, "one trade from modify");
     assert_eq!(engine.size(&pair), Some(1), "sell has 7 left");
 }
 
@@ -205,10 +188,9 @@ fn test_modify_triggers_match() {
 fn test_fak_rejected_when_no_match() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 5);
-    // FaK buy below best ask → rejected
-    let trades = place_fak(&mut engine, &pair, 2, Side::Buy, 1800, 3);
-    assert!(trades.is_none(), "FaK should be rejected");
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 5);
+    let result = place_fak(&mut engine, &pair, user_a(), Side::Buy, 1800, 3);
+    assert!(result.is_none(), "FaK should be rejected");
     assert_eq!(engine.size(&pair), Some(1), "only original sell remains");
 }
 
@@ -216,11 +198,9 @@ fn test_fak_rejected_when_no_match() {
 fn test_fak_matched_partial_then_killed() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 3);
-    // FaK buy 5@2000 — matches 3, remaining 2 killed
-    let trades = place_fak(&mut engine, &pair, 2, Side::Buy, 2000, 5);
-    assert_eq!(trades.as_ref().unwrap().len(), 1, "one match");
-    // Sell filled, FaK killed → no orders remain
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 3);
+    let result = place_fak(&mut engine, &pair, user_a(), Side::Buy, 2000, 5);
+    assert_eq!(result.as_ref().unwrap().trades.as_ref().unwrap().len(), 1, "one match");
     assert_eq!(engine.size(&pair), Some(0), "all consumed or killed");
 }
 
@@ -228,10 +208,9 @@ fn test_fak_matched_partial_then_killed() {
 fn test_fak_matched_fully() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 5);
-    // FaK buy 5@2000 — matches fully
-    let trades = place_fak(&mut engine, &pair, 2, Side::Buy, 2000, 5);
-    assert_eq!(trades.as_ref().unwrap().len(), 1, "one match");
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 5);
+    let result = place_fak(&mut engine, &pair, user_a(), Side::Buy, 2000, 5);
+    assert_eq!(result.as_ref().unwrap().trades.as_ref().unwrap().len(), 1, "one match");
     assert_eq!(engine.size(&pair), Some(0), "both filled");
 }
 
@@ -253,29 +232,30 @@ fn test_multiple_pairs_independent() {
     engine.deposit(user_b(), Asset::ETH, 10_000).unwrap();
     engine.deposit(user_b(), Asset::SOL, 10_000).unwrap();
 
-    // Place orders on ETH
-    place_limit(&mut engine, &eth, 1, Side::Sell, 2000, 5);
-    place_limit(&mut engine, &eth, 2, Side::Buy, 2000, 3);
+    place_limit(&mut engine, &eth, user_b(), Side::Sell, 2000, 5);
+    place_limit(&mut engine, &eth, user_a(), Side::Buy, 2000, 3);
 
-    // Place orders on SOL
-    place_limit(&mut engine, &sol, 101, Side::Sell, 100, 20);
-    place_limit(&mut engine, &sol, 102, Side::Buy, 100, 10);
+    place_limit(&mut engine, &sol, user_b(), Side::Sell, 100, 20);
+    place_limit(&mut engine, &sol, user_a(), Side::Buy, 100, 10);
 
     assert_eq!(engine.size(&eth), Some(1), "ETH sell 2 left");
     assert_eq!(engine.size(&sol), Some(1), "sell 10 left, buy 10 filled");
 }
 
-// Duplicate order ID
-
+// Order IDs are engine-generated, so duplicates are impossible through the engine API.
+// This test verifies that each placed order gets a unique snowflake ID.
 #[test]
-fn test_reject_duplicate_order_id() {
+fn test_each_order_gets_unique_id() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 5);
-    // Same ID again → rejected
-    let trades = place_limit(&mut engine, &pair, 1, Side::Buy, 2000, 3);
-    assert!(trades.is_none(), "duplicate ID rejected");
-    assert_eq!(engine.size(&pair), Some(1), "only original order");
+    let r1 = place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 5).unwrap();
+    let r2 = place_limit(&mut engine, &pair, user_b(), Side::Sell, 2100, 5).unwrap();
+    let r3 = place_limit(&mut engine, &pair, user_a(), Side::Buy, 1900, 3).unwrap();
+
+    assert_ne!(r1.order_id, r2.order_id);
+    assert_ne!(r2.order_id, r3.order_id);
+    assert_ne!(r1.order_id, r3.order_id);
+    assert_eq!(engine.size(&pair), Some(3));
 }
 
 // Remove trading pair
@@ -284,7 +264,7 @@ fn test_reject_duplicate_order_id() {
 fn test_remove_trading_pair() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
 
-    place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 5);
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 5);
     assert!(engine.size(&pair).is_some());
 
     let removed = engine.remove_trading_pair(&pair);
@@ -327,9 +307,14 @@ fn test_get_order_info_empty_pair() {
 #[test]
 fn test_trade_info_fields() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
-    place_limit(&mut engine, &pair, 1, Side::Sell, 2000, 5);
-    let trades = place_limit(&mut engine, &pair, 2, Side::Buy, 2000, 5).unwrap();
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 5);
+    let result = place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 5).unwrap();
+    let trades = result.trades.unwrap();
     let trade = &trades[0];
+
+    assert!(trade.get_trade_id() != 0, "trade_id should be non-zero");
+    assert!(trade.get_timestamp() != 0, "timestamp should be non-zero");
+
     let bid = trade.get_bid_trade_info();
     let ask = trade.get_ask_trade_info();
     let _ = bid.get_order_id();
@@ -345,13 +330,44 @@ fn test_trade_info_fields() {
 #[test]
 fn test_time_priority() {
     let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
-    // Order A: buy 5@2000 (earlier)
-    place_limit(&mut engine, &pair, 1, Side::Buy, 2000, 5);
-    // Order B: buy 3@2000 (later, same price)
-    place_limit(&mut engine, &pair, 2, Side::Buy, 2000, 3);
-    // Order C: sell 10@2000 — must fill A (5) before B (3)
-    let trades = place_limit(&mut engine, &pair, 3, Side::Sell, 2000, 10).unwrap();
-    assert_eq!(trades.len(), 2);
-    // sell 2 remaining (10 - 5 - 3)
+    place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 5);
+    place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 3);
+    let result = place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 10).unwrap();
+    assert_eq!(result.trades.as_ref().unwrap().len(), 2);
     assert_eq!(engine.size(&pair), Some(1));
+}
+
+// ---------------------------------------------------------------------------
+// Snowflake ID tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_order_ids_are_unique() {
+    let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
+
+    let r1 = place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 5);
+    let r2 = place_limit(&mut engine, &pair, user_b(), Side::Sell, 2100, 5);
+    let r3 = place_limit(&mut engine, &pair, user_b(), Side::Sell, 2200, 5);
+
+    let id1 = r1.unwrap().order_id;
+    let id2 = r2.unwrap().order_id;
+    let id3 = r3.unwrap().order_id;
+
+    assert_ne!(id1, id2);
+    assert_ne!(id2, id3);
+    assert_ne!(id1, id3);
+}
+
+#[test]
+fn test_trade_ids_are_unique() {
+    let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
+
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 10);
+    let r1 = place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 5);
+    let r2 = place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 5);
+
+    let tid1 = r1.unwrap().trades.unwrap()[0].get_trade_id();
+    let tid2 = r2.unwrap().trades.unwrap()[0].get_trade_id();
+
+    assert_ne!(tid1, tid2);
 }

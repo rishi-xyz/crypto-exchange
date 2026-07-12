@@ -2,7 +2,7 @@ use std::{collections::VecDeque, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{OrderId, Price, Quantity, UserId};
+use crate::types::{OrderId, Price, Quantity, TradeId, UserId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeInfo {
@@ -35,14 +35,32 @@ type TradeInfoPointer = Arc<TradeInfo>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trade {
+    trade_id: TradeId,
+    timestamp: u64,
     bid_trade: TradeInfoPointer,
     ask_trade: TradeInfoPointer,
 }
 
 impl Trade {
-    pub fn new(bid_trade: TradeInfoPointer, ask_trade : TradeInfoPointer) 
+    pub fn new(trade_id: TradeId, timestamp: u64, bid_trade: TradeInfoPointer, ask_trade: TradeInfoPointer) 
     ->Self {
-        return Trade { bid_trade, ask_trade };
+        return Trade { trade_id, timestamp, bid_trade, ask_trade };
+    }
+
+    pub fn get_trade_id(&self) -> TradeId {
+        self.trade_id
+    }
+
+    pub fn get_timestamp(&self) -> u64 {
+        self.timestamp
+    }
+
+    pub fn set_trade_id(&mut self, id: TradeId) {
+        self.trade_id = id;
+    }
+
+    pub fn set_timestamp(&mut self, ts: u64) {
+        self.timestamp = ts;
     }
 
     pub fn get_bid_trade_info(&self)->TradeInfoPointer {

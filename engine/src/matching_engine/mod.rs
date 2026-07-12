@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     level_info::OrderBookLevelInfo,
     order::{Order, OrderPointer},
     order_modify::OrderModify,
     orderbook::OrderBook,
+    snowflake::SnowflakeGenerator,
     trade::Trades,
     trading_pair::TradingPair,
     types::{Asset, OrderId, Quantity, Side, UserId},
@@ -13,10 +15,16 @@ use crate::{
 
 use std::sync::{Arc, Mutex};
 
+pub struct AddOrderResult {
+    pub order_id: OrderId,
+    pub trades: Option<Trades>,
+}
+
 #[derive(Debug)]
 pub struct Engine {
     orderbooks: HashMap<TradingPair, OrderBook>,
     users: HashMap<UserId, User>,
+    id_generator: SnowflakeGenerator,
 }
 
 impl Engine {
@@ -24,6 +32,7 @@ impl Engine {
         Engine {
             orderbooks: HashMap::new(),
             users: HashMap::new(),
+            id_generator: SnowflakeGenerator::new(1, 1),
         }
     }
 
@@ -84,11 +93,16 @@ impl Engine {
         user_id: UserId,
         pair: &TradingPair,
         order: OrderPointer,
-    ) -> Result<Option<Trades>, String> {
-        let (order_id, side, price, quantity) = {
+    ) -> Result<Option<AddOrderResult>, String> {
+        let order_id = self.id_generator.next_id();
+        {
+            let mut o = order.lock().unwrap();
+            o.set_order_id(order_id);
+        }
+
+        let (side, price, quantity) = {
             let o = order.lock().unwrap();
             (
-                o.get_order_id(),
                 o.get_side(),
                 o.get_price(),
                 o.get_initial_quantity(),
@@ -116,9 +130,18 @@ impl Engine {
             .ok_or("Trading pair not found")?;
 
         match book.add_order(order) {
-            Some(trades) => {
-                let incoming_id = order_id;
+            Some(mut trades) => {
                 let incoming_side = side;
+
+                for trade in &mut trades {
+                    trade.set_trade_id(self.id_generator.next_id());
+                    trade.set_timestamp(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos() as u64,
+                    );
+                }
 
                 for trade in &trades {
                     let bid = trade.get_bid_trade_info();
@@ -153,14 +176,14 @@ impl Engine {
                 if !self
                     .orderbooks
                     .get(pair)
-                    .map_or(false, |b| b.has_order(&incoming_id))
+                    .map_or(false, |b| b.has_order(&order_id))
                 {
                     if let Some(user) = self.users.get_mut(&user_id) {
-                        let _ = user.unlock_order(&incoming_id);
+                        let _ = user.unlock_order(&order_id);
                     }
                 }
 
-                Ok(Some(trades))
+                Ok(Some(AddOrderResult { order_id, trades: Some(trades) }))
             }
             None => {
                 if let Some(user) = self.users.get_mut(&user_id) {
@@ -193,7 +216,7 @@ impl Engine {
         &mut self,
         pair: &TradingPair,
         modify_order: OrderModify,
-    ) -> Option<Trades> {
+    ) -> Option<AddOrderResult> {
         let order_id = modify_order.get_order_id();
         let user_id = modify_order.get_user_id();
 
@@ -204,8 +227,9 @@ impl Engine {
 
         self.cancel_order(pair, &order_id);
 
+        let new_id = self.id_generator.next_id();
         let new_order = Arc::new(Mutex::new(Order::new(
-            order_id,
+            new_id,
             order_type,
             modify_order.get_side(),
             modify_order.get_status(),

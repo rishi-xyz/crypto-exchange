@@ -99,6 +99,8 @@ impl OrderBook {
                     self.orders_map.remove(&ask_id);
                 }
                 trades.push_back(Trade::new(
+                    0,
+                    0,
                     Arc::new(TradeInfo::new(bid_id, bid_price, quantity,bid_user_id)),
                     Arc::new(TradeInfo::new(ask_id, ask_price, quantity,ask_user_id)),
                 ));

@@ -4,6 +4,7 @@ use uuid::Uuid;
 pub type Price  = i32;
 pub type Quantity = u32;
 pub type OrderId = u64;
+pub type TradeId = u64;
 pub type UserId = Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

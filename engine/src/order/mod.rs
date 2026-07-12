@@ -98,6 +98,10 @@ impl Order {
     pub fn get_user_id(&self) -> UserId {
         self.user_id
     }
+
+    pub fn set_order_id(&mut self, id: OrderId) {
+        self.order_id = id;
+    }
 }
 
 pub type OrderPointer = Arc<Mutex<Order>>;
