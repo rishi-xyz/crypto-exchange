@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex, Once};
 
 use engine::{
-    matching_engine::Engine,
+    engine::{CoreEngine, ExchangeEngine},
     order::Order,
     order_modify::OrderModify,
     trading_pair::TradingPair,
@@ -28,9 +28,9 @@ fn user_b() -> UserId {
     UserId::parse_str(USER_B).unwrap()
 }
 
-fn setup(pair: TradingPair) -> (Engine, TradingPair) {
+fn setup(pair: TradingPair) -> (CoreEngine, TradingPair) {
     init_test_logging();
-    let mut engine = Engine::new();
+    let mut engine = CoreEngine::new();
     engine.add_trading_pair(pair);
     engine.add_user(User::new(Some(user_a())));
     engine.add_user(User::new(Some(user_b())));
@@ -45,15 +45,16 @@ fn setup(pair: TradingPair) -> (Engine, TradingPair) {
 
 /// Helper: place a limit order and return the result
 fn place_limit(
-    engine: &mut Engine,
+    engine: &mut CoreEngine,
     pair: &TradingPair,
     user: UserId,
     side: Side,
     price: i32,
     qty: u32,
-) -> Option<engine::matching_engine::AddOrderResult> {
+) -> Option<engine::engine::AddOrderResult> {
+    let order_id = engine.next_id();
     let order = Arc::new(Mutex::new(Order::new(
-        0,
+        order_id,
         OrderType::GoodTillCancel,
         side,
         OrderStatus::Empty,
@@ -65,15 +66,16 @@ fn place_limit(
 }
 
 fn place_fak(
-    engine: &mut Engine,
+    engine: &mut CoreEngine,
     pair: &TradingPair,
     user: UserId,
     side: Side,
     price: i32,
     qty: u32,
-) -> Option<engine::matching_engine::AddOrderResult> {
+) -> Option<engine::engine::AddOrderResult> {
+    let order_id = engine.next_id();
     let order = Arc::new(Mutex::new(Order::new(
-        0,
+        order_id,
         OrderType::FillAndKill,
         side,
         OrderStatus::Empty,
@@ -84,7 +86,7 @@ fn place_fak(
     engine.add_order(user, pair, order).ok()?
 }
 
-fn new_engine(pair: TradingPair) -> (Engine, TradingPair) {
+fn new_engine(pair: TradingPair) -> (CoreEngine, TradingPair) {
     setup(pair)
 }
 
@@ -227,7 +229,7 @@ fn test_fak_matched_fully() {
 
 #[test]
 fn test_multiple_pairs_independent() {
-    let mut engine = Engine::new();
+    let mut engine = CoreEngine::new();
     let eth = TradingPair::new(Asset::ETH, Asset::USDC);
     let sol = TradingPair::new(Asset::SOL, Asset::USDC);
     engine.add_trading_pair(eth);
@@ -283,7 +285,7 @@ fn test_remove_trading_pair() {
 
 #[test]
 fn test_remove_nonexistent_pair() {
-    let mut engine = Engine::new();
+    let mut engine = CoreEngine::new();
     let pair = TradingPair::new(Asset::ETH, Asset::USDC);
     assert!(engine.remove_trading_pair(&pair).is_none());
 }
@@ -302,7 +304,7 @@ fn test_get_order_info_empty_pair() {
     let (engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
     let _ = engine;
     let _ = pair;
-    let mut engine = Engine::new();
+    let mut engine = CoreEngine::new();
     let pair = TradingPair::new(Asset::ETH, Asset::USDC);
     engine.add_trading_pair(pair);
     let info = engine.get_order_info(&pair);

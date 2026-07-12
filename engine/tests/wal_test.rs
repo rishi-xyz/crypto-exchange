@@ -1,12 +1,12 @@
 use std::sync::{Arc, Mutex};
 
 use engine::{
-    matching_engine::Engine,
+    engine::ExchangeEngine,
     order::Order,
     trading_pair::TradingPair,
     types::{Asset, OrderStatus, OrderType, Side},
     users::User,
-    wal::Wal,
+    wal::{Wal, WalEngine},
 };
 
 fn user_a() -> uuid::Uuid {
@@ -18,13 +18,13 @@ fn user_b() -> uuid::Uuid {
 }
 
 fn place(
-    engine: &mut Engine,
+    engine: &mut WalEngine,
     user: uuid::Uuid,
     pair: &TradingPair,
     side: Side,
     price: i32,
     qty: u32,
-) -> engine::matching_engine::AddOrderResult {
+) -> engine::engine::AddOrderResult {
     let order = Arc::new(Mutex::new(Order::new(
         0,
         OrderType::GoodTillCancel,
@@ -49,7 +49,7 @@ fn test_wal_basic_replay() {
 
     // Phase 1: build up state
     {
-        let mut engine = Engine::new_with_wal(&wal_path);
+        let mut engine = WalEngine::new(&wal_path);
         let pair = TradingPair::new(Asset::ETH, Asset::USDC);
         engine.add_trading_pair(pair);
         engine.add_user(User::new(Some(user_a())));
@@ -65,7 +65,7 @@ fn test_wal_basic_replay() {
 
     // Phase 2: replay and verify state is identical
     {
-        let engine = Engine::new_with_wal(&wal_path);
+        let engine = WalEngine::new(&wal_path);
         let pair = TradingPair::new(Asset::ETH, Asset::USDC);
 
         assert_eq!(engine.size(&pair), Some(1), "sell 5 remaining after replay");
@@ -93,7 +93,7 @@ fn test_wal_corrupt_line_skipped() {
 
     // Build some valid state
     {
-        let mut engine = Engine::new_with_wal(&wal_path);
+        let mut engine = WalEngine::new(&wal_path);
         let pair = TradingPair::new(Asset::ETH, Asset::USDC);
         engine.add_trading_pair(pair);
         engine.add_user(User::new(Some(user_a())));
@@ -115,7 +115,7 @@ fn test_wal_corrupt_line_skipped() {
 
     // Replay should skip corrupt lines and return successfully
     {
-        let engine = Engine::new_with_wal(&wal_path);
+        let engine = WalEngine::new(&wal_path);
         let pair = TradingPair::new(Asset::ETH, Asset::USDC);
         assert_eq!(engine.size(&pair), Some(0), "pair survived replay despite corrupt lines");
     }
@@ -134,7 +134,7 @@ fn test_wal_cancel_replay() {
     // Phase 1: place then cancel
     let order_id;
     {
-        let mut engine = Engine::new_with_wal(&wal_path);
+        let mut engine = WalEngine::new(&wal_path);
         let pair = TradingPair::new(Asset::ETH, Asset::USDC);
         engine.add_trading_pair(pair);
         engine.add_user(User::new(Some(user_a())));
@@ -150,7 +150,7 @@ fn test_wal_cancel_replay() {
 
     // Phase 2: replay — cancel should persist
     {
-        let engine = Engine::new_with_wal(&wal_path);
+        let engine = WalEngine::new(&wal_path);
         let pair = TradingPair::new(Asset::ETH, Asset::USDC);
         assert_eq!(engine.size(&pair), Some(0), "order stays cancelled after replay");
     }
@@ -167,7 +167,7 @@ fn test_wal_modify_replay() {
     let wal_path = dir.path().join("test.wal");
 
     {
-        let mut engine = Engine::new_with_wal(&wal_path);
+        let mut engine = WalEngine::new(&wal_path);
         let pair = TradingPair::new(Asset::ETH, Asset::USDC);
         engine.add_trading_pair(pair);
         engine.add_user(User::new(Some(user_a())));
@@ -195,29 +195,36 @@ fn test_wal_modify_replay() {
 
     // Replay
     {
-        let engine = Engine::new_with_wal(&wal_path);
+        let engine = WalEngine::new(&wal_path);
         let pair = TradingPair::new(Asset::ETH, Asset::USDC);
-        // The book should reflect the state after modify:
-        // sell at 2100 was cancelled, new sell at 1900 was matched with buyer
-        // size depends on how many orders were consumed — just verify no panic
         let _ = engine.size(&pair);
     }
 }
 
 // ---------------------------------------------------------------------------
-// 5. No-WAL mode — Engine::new() still works
+// 5. No-WAL mode — CoreEngine::new() still works
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_no_wal_mode() {
     engine::logging::init_test();
-    let mut engine = Engine::new();
+    let mut engine = engine::engine::CoreEngine::new();
     let pair = TradingPair::new(Asset::ETH, Asset::USDC);
     engine.add_trading_pair(pair);
     engine.add_user(User::new(Some(user_a())));
     engine.deposit(user_a(), Asset::USDC, 50_000).unwrap();
 
-    let r = place(&mut engine, user_a(), &pair, Side::Buy, 1800, 2);
+    let order_id = engine.next_id();
+    let order = Arc::new(Mutex::new(Order::new(
+        order_id,
+        OrderType::GoodTillCancel,
+        Side::Buy,
+        OrderStatus::Empty,
+        1800,
+        2,
+        user_a(),
+    )));
+    let r = engine.add_order(user_a(), &pair, order).ok().unwrap().unwrap();
     assert!(r.order_id > 0);
     assert_eq!(engine.size(&pair), Some(1));
 }
@@ -233,7 +240,7 @@ fn test_wal_sequence_numbers() {
     let wal_path = dir.path().join("test.wal");
 
     {
-        let mut engine = Engine::new_with_wal(&wal_path);
+        let mut engine = WalEngine::new(&wal_path);
         let pair = TradingPair::new(Asset::ETH, Asset::USDC);
         engine.add_trading_pair(pair);
         engine.add_user(User::new(Some(user_a())));
@@ -243,7 +250,7 @@ fn test_wal_sequence_numbers() {
 
     // Replaying engine truncates the WAL
     {
-        let _engine = Engine::new_with_wal(&wal_path);
+        let _engine = WalEngine::new(&wal_path);
     }
 
     // WAL should be empty after replay+truncate
@@ -262,7 +269,7 @@ fn test_wal_deposit_replay() {
     let wal_path = dir.path().join("test.wal");
 
     {
-        let mut engine = Engine::new_with_wal(&wal_path);
+        let mut engine = WalEngine::new(&wal_path);
         let pair = TradingPair::new(Asset::ETH, Asset::USDC);
         engine.add_trading_pair(pair);
         engine.add_user(User::new(Some(user_a())));
@@ -270,7 +277,7 @@ fn test_wal_deposit_replay() {
     }
 
     {
-        let engine = Engine::new_with_wal(&wal_path);
+        let engine = WalEngine::new(&wal_path);
         let bal = engine.get_user_balance(&user_a()).unwrap();
         assert_eq!(bal.get(&Asset::USDC).unwrap().0, 25_000, "USDC balance matches");
     }
@@ -290,7 +297,7 @@ fn test_wal_multiple_pairs_replay() {
     let sol = TradingPair::new(Asset::SOL, Asset::USDC);
 
     {
-        let mut engine = Engine::new_with_wal(&wal_path);
+        let mut engine = WalEngine::new(&wal_path);
         engine.add_trading_pair(eth);
         engine.add_trading_pair(sol);
         engine.add_user(User::new(Some(user_a())));
@@ -306,7 +313,7 @@ fn test_wal_multiple_pairs_replay() {
     }
 
     {
-        let engine = Engine::new_with_wal(&wal_path);
+        let engine = WalEngine::new(&wal_path);
         assert_eq!(engine.size(&eth), Some(1), "ETH sell 5 remaining");
         assert_eq!(engine.size(&sol), Some(1), "SOL sell 10 remaining");
     }
@@ -325,7 +332,7 @@ fn test_wal_fak_rejected_no_side_effect() {
     let eth = TradingPair::new(Asset::ETH, Asset::USDC);
 
     {
-        let mut engine = Engine::new_with_wal(&wal_path);
+        let mut engine = WalEngine::new(&wal_path);
         engine.add_trading_pair(eth);
         engine.add_user(User::new(Some(user_a())));
         engine.deposit(user_a(), Asset::USDC, 100_000).unwrap();
@@ -346,7 +353,7 @@ fn test_wal_fak_rejected_no_side_effect() {
     }
 
     {
-        let engine = Engine::new_with_wal(&wal_path);
+        let engine = WalEngine::new(&wal_path);
         assert_eq!(engine.size(&eth), Some(0), "still nothing after replay");
     }
 }
@@ -364,7 +371,7 @@ fn test_wal_locked_balance_survives_replay() {
     let eth = TradingPair::new(Asset::ETH, Asset::USDC);
 
     {
-        let mut engine = Engine::new_with_wal(&wal_path);
+        let mut engine = WalEngine::new(&wal_path);
         engine.add_trading_pair(eth);
         engine.add_user(User::new(Some(user_a())));
         engine.deposit(user_a(), Asset::USDC, 100_000).unwrap();
@@ -379,7 +386,7 @@ fn test_wal_locked_balance_survives_replay() {
     }
 
     {
-        let engine = Engine::new_with_wal(&wal_path);
+        let engine = WalEngine::new(&wal_path);
         let bal = engine.get_user_balance(&user_a()).unwrap();
         let (available, locked) = bal.get(&Asset::USDC).unwrap();
         assert_eq!(*locked, 20_000, "locked balance after replay");

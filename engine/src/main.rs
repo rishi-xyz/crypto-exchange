@@ -14,11 +14,10 @@
 //!
 //! Run with `cargo run` from the `engine/` directory.
 
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use engine::{
-    matching_engine::{AddOrderResult, Engine},
+    engine::{AddOrderResult, ExchangeEngine, engine_from_env},
     order::Order,
     order_modify::OrderModify,
     trading_pair::TradingPair,
@@ -28,7 +27,7 @@ use engine::{
 
 /// Helper: creates a GoodTillCancel limit order and places it. Panics on failure.
 fn place(
-    engine: &mut Engine,
+    engine: &mut dyn ExchangeEngine,
     user_id: UserId,
     pair: &TradingPair,
     side: Side,
@@ -66,7 +65,7 @@ fn place(
 
 /// Helper: creates a FillAndKill limit order and places it. Returns `None` if rejected (no match).
 fn place_fak(
-    engine: &mut Engine,
+    engine: &mut dyn ExchangeEngine,
     user_id: UserId,
     pair: &TradingPair,
     side: Side,
@@ -111,7 +110,13 @@ fn place_fak(
 }
 
 fn main() {
-    engine::logging::init();
+    let tracing_enabled = std::env::var("TRACING_ENABLED")
+        .unwrap_or_else(|_| "true".into())
+        != "false";
+
+    if tracing_enabled {
+        engine::logging::init();
+    }
 
     let _guard = tracing::info_span!(
         "engine_demo",
@@ -122,7 +127,7 @@ fn main() {
 
     tracing::info!("Matching engine demo starting");
 
-    let mut engine = Engine::new_with_wal(Path::new("engine.wal"));
+    let mut engine: Box<dyn ExchangeEngine> = engine_from_env();
     let eth_usdc = TradingPair::new(Asset::ETH, Asset::USDC);
     let sol_usdc = TradingPair::new(Asset::SOL, Asset::USDC);
     engine.add_trading_pair(eth_usdc);
@@ -151,8 +156,8 @@ fn main() {
     // ============================================================================
     tracing::info!("=== 1. Basic match — Bob sells 10 ETH, Alice buys 5 (partial fill) ===");
     // ============================================================================
-    place(&mut engine, bob, &eth_usdc, Side::Sell, 2000, 10);
-    place(&mut engine, alice, &eth_usdc, Side::Buy, 2000, 5);
+    place(&mut *engine, bob, &eth_usdc, Side::Sell, 2000, 10);
+    place(&mut *engine, alice, &eth_usdc, Side::Buy, 2000, 5);
     if let Some(info) = engine.get_order_info(&eth_usdc) {
         tracing::debug!(pair = "ETH-USDC", bids = ?info.get_bids(), asks = ?info.get_asks(), "Orderbook");
     }
@@ -167,7 +172,7 @@ fn main() {
     // ============================================================================
     tracing::info!("=== 2. No match — Alice buys below best ask ===");
     // ============================================================================
-    place(&mut engine, alice, &eth_usdc, Side::Buy, 1900, 3);
+    place(&mut *engine, alice, &eth_usdc, Side::Buy, 1900, 3);
     if let Some(info) = engine.get_order_info(&eth_usdc) {
         tracing::debug!(pair = "ETH-USDC", bids = ?info.get_bids(), asks = ?info.get_asks(), "Orderbook");
     }
@@ -178,7 +183,7 @@ fn main() {
     // ============================================================================
     tracing::info!("=== 3. Full fill remaining — Alice buys remaining 5 ETH ===");
     // ============================================================================
-    place(&mut engine, alice, &eth_usdc, Side::Buy, 2000, 5);
+    place(&mut *engine, alice, &eth_usdc, Side::Buy, 2000, 5);
     if let Some(info) = engine.get_order_info(&eth_usdc) {
         tracing::debug!(pair = "ETH-USDC", bids = ?info.get_bids(), asks = ?info.get_asks(), "Orderbook");
     }
@@ -193,7 +198,7 @@ fn main() {
     // ============================================================================
     tracing::info!("=== 4. Cancel order ===");
     // ============================================================================
-    let sell2 = place(&mut engine, bob, &eth_usdc, Side::Sell, 2100, 8);
+    let sell2 = place(&mut *engine, bob, &eth_usdc, Side::Sell, 2100, 8);
     if let Some(info) = engine.get_order_info(&eth_usdc) {
         tracing::debug!(pair = "ETH-USDC", bids = ?info.get_bids(), asks = ?info.get_asks(), "Orderbook before cancel");
     }
@@ -211,7 +216,7 @@ fn main() {
     // ============================================================================
     tracing::info!("=== 5. Modify order — change price to trigger match ===");
     // ============================================================================
-    let sell3 = place(&mut engine, bob, &eth_usdc, Side::Sell, 2100, 10);
+    let sell3 = place(&mut *engine, bob, &eth_usdc, Side::Sell, 2100, 10);
     if let Some(info) = engine.get_order_info(&eth_usdc) {
         tracing::debug!(pair = "ETH-USDC", bids = ?info.get_bids(), asks = ?info.get_asks(), "Orderbook before modify");
     }
@@ -237,7 +242,7 @@ fn main() {
     // ============================================================================
     tracing::info!("=== 6. FillAndKill — can't match (buy below best ask) ===");
     // ============================================================================
-    place_fak(&mut engine, alice, &eth_usdc, Side::Buy, 1800, 2);
+    place_fak(&mut *engine, alice, &eth_usdc, Side::Buy, 1800, 2);
     if let Some(info) = engine.get_order_info(&eth_usdc) {
         tracing::debug!(pair = "ETH-USDC", bids = ?info.get_bids(), asks = ?info.get_asks(), "Orderbook");
     }
@@ -249,7 +254,7 @@ fn main() {
     // ============================================================================
     tracing::info!("=== 7. FillAndKill — matches fully ===");
     // ============================================================================
-    place_fak(&mut engine, alice, &eth_usdc, Side::Buy, 1900, 2);
+    place_fak(&mut *engine, alice, &eth_usdc, Side::Buy, 1900, 2);
     if let Some(info) = engine.get_order_info(&eth_usdc) {
         tracing::debug!(pair = "ETH-USDC", bids = ?info.get_bids(), asks = ?info.get_asks(), "Orderbook");
     }
@@ -264,9 +269,9 @@ fn main() {
     // ============================================================================
     tracing::info!("=== 8. Multiple trading pairs (SOL/USDC) ===");
     // ============================================================================
-    place(&mut engine, bob, &sol_usdc, Side::Sell, 100, 20);
-    place(&mut engine, alice, &sol_usdc, Side::Buy, 100, 10);
-    place(&mut engine, alice, &sol_usdc, Side::Buy, 105, 5);
+    place(&mut *engine, bob, &sol_usdc, Side::Sell, 100, 20);
+    place(&mut *engine, alice, &sol_usdc, Side::Buy, 100, 10);
+    place(&mut *engine, alice, &sol_usdc, Side::Buy, 105, 5);
     if let Some(info) = engine.get_order_info(&sol_usdc) {
         tracing::debug!(pair = "SOL-USDC", bids = ?info.get_bids(), asks = ?info.get_asks(), "Orderbook");
     }
