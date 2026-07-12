@@ -1,7 +1,7 @@
 //! Trade and trade-info types — represent a matched fill between two orders.
 //!
-//! When an incoming order matches a resting order in the book, a [`Trade`] is created.
-//! Each [`Trade`] contains two [`TradeInfo`] snapshots: one for the buy side and one
+//! When an incoming order matches a resting order in the book, a [`Trade`](crate::trade::Trade) is created.
+//! Each [`Trade`](crate::trade::Trade) contains two [`TradeInfo`](crate::trade::TradeInfo) snapshots: one for the buy side and one
 //! for the sell side. The engine stamps the trade with a snowflake ID and timestamp
 //! after the orderbook produces it.
 
@@ -73,7 +73,7 @@ type TradeInfoPointer = Arc<TradeInfo>;
 ///
 /// Created by the [`OrderBook`](crate::orderbook::OrderBook) during matching.
 /// Initially constructed with placeholder `trade_id = 0` and `timestamp = 0`;
-/// the [`Engine`](crate::matching_engine::Engine) stamps real values via
+/// the [`CoreEngine`](crate::engine::CoreEngine) stamps real values via
 /// [`set_trade_id`](Trade::set_trade_id) and [`set_timestamp`](Trade::set_timestamp).
 ///
 /// # Fields

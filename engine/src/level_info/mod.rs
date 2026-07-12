@@ -1,6 +1,6 @@
 //! Orderbook depth snapshot types.
 //!
-//! Provides [`LevelInfo`] (a single price level) and [`OrderBookLevelInfo`]
+//! Provides [`LevelInfo`](crate::level_info::LevelInfo) (a single price level) and [`OrderBookLevelInfo`](crate::level_info::OrderBookLevelInfo)
 //! (a full book snapshot) for read-only queries. These are cheap to construct
 //! and are returned by [`OrderBook::get_order_info`](crate::orderbook::OrderBook::get_order_info).
 
@@ -43,7 +43,7 @@ pub type LevelInfos = Arc<VecDeque<LevelInfo>>;
 /// A full orderbook depth snapshot — bids and asks at each price level.
 ///
 /// Returned by [`OrderBook::get_order_info`](crate::orderbook::OrderBook::get_order_info)
-/// and [`Engine::get_order_info`](crate::matching_engine::Engine::get_order_info).
+/// and [`ExchangeEngine::get_order_info`](crate::engine::ExchangeEngine::get_order_info).
 /// Bids are sorted ascending by price (best bid last); asks are sorted
 /// ascending by price (best ask first).
 #[derive(Debug, Clone, Serialize, Deserialize)]

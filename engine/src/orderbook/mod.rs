@@ -1,6 +1,6 @@
 //! Price-time priority order book for a single trading pair.
 //!
-//! The [`OrderBook`] maintains two sides — bids (buy orders) and asks (sell orders) —
+//! The [`OrderBook`](crate::orderbook::OrderBook) maintains two sides — bids (buy orders) and asks (sell orders) —
 //! each organized as a `BTreeMap<Price, VecDeque<Order>>`. This gives us:
 //!
 //! - **Price priority** — `BTreeMap` keeps levels sorted; best bid is the max key,
@@ -9,7 +9,7 @@
 //!
 //! # Matching Algorithm
 //!
-//! When an incoming order arrives via [`add_order`](OrderBook::add_order):
+//! When an incoming order arrives via [`add_order`](crate::orderbook::OrderBook::add_order):
 //!
 //! 1. Check if the order can match (price is at or past the best opposite price).
 //! 2. Walk the opposite side from the best price inward.
@@ -22,7 +22,7 @@
 //! # Thread Safety
 //!
 //! Individual orders are `Arc<Mutex<Order>>`. The book itself is **not** `Sync` —
-//! it is owned by the [`Engine`](crate::matching_engine::Engine) which is wrapped
+//! it is owned by the [`CoreEngine`](crate::engine::CoreEngine) which is wrapped
 //! in a `tokio::sync::RwLock` at the gRPC boundary.
 
 use std::{

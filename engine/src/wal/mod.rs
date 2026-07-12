@@ -6,7 +6,7 @@
 //!
 //! # Format
 //!
-//! Each line is a serialized [`WalEntry`]:
+//! Each line is a serialized [`WalEntry`](crate::wal::WalEntry):
 //!
 //! ```text
 //! {"sequence":1,"operation":{"AddTradingPair":{"pair":{"base":"ETH","quote":"USDC"}}},"timestamp":1700000000000000000}
@@ -62,27 +62,37 @@ use crate::{
 /// All mutating operations that can be written to the WAL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WalOperation {
+    /// Credits a user's balance. Written by [`Engine::deposit`](crate::engine::ExchangeEngine::deposit).
     Deposit {
         user_id: UserId,
         asset: Asset,
         amount: Quantity,
     },
+    /// Places a new order. Written by [`Engine::add_order`](crate::engine::ExchangeEngine::add_order).
+    ///
+    /// Includes the [`TradingPair`] because during replay the order hasn't been
+    /// inserted into the book yet, so the pair can't be inferred from book state.
     PlaceOrder {
         pair: TradingPair,
         order: Order,
     },
+    /// Cancels a resting order. Written by [`Engine::cancel_order`](crate::engine::ExchangeEngine::cancel_order).
     CancelOrder {
         pair: TradingPair,
         order_id: OrderId,
     },
+    /// Modifies an order via cancel-replace. Written as a **single** entry
+    /// (not separate cancel + place) to avoid replay ordering issues.
     ModifyOrder {
         pair: TradingPair,
         old_order_id: OrderId,
         new_order: Order,
     },
+    /// Adds a new trading pair. Written by [`Engine::add_trading_pair`](crate::engine::ExchangeEngine::add_trading_pair).
     AddTradingPair {
         pair: TradingPair,
     },
+    /// Registers a new user. Written by [`Engine::add_user`](crate::engine::ExchangeEngine::add_user).
     AddUser {
         user: User,
     },
@@ -91,8 +101,11 @@ pub enum WalOperation {
 /// A single entry in the write-ahead log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalEntry {
+    /// Monotonically increasing sequence number. Used for ordering and crash detection.
     pub sequence: u64,
+    /// The mutation to replay.
     pub operation: WalOperation,
+    /// Nanosecond epoch timestamp of when the entry was written.
     pub timestamp: u64,
 }
 
@@ -329,6 +342,7 @@ impl std::fmt::Debug for WalEngine {
 // =========================================================================
 
 impl ExchangeEngine for WalEngine {
+    /// Writes `AddTradingPair` to WAL, then delegates to [`CoreEngine`].
     #[instrument(skip(self))]
     fn add_trading_pair(&mut self, pair: TradingPair) {
         if let Err(e) = self.wal.append(WalOperation::AddTradingPair { pair }) {
@@ -337,11 +351,13 @@ impl ExchangeEngine for WalEngine {
         self.inner.add_trading_pair(pair);
     }
 
+    /// Delegates to [`CoreEngine`] (no WAL entry — not critical for V1 recovery).
     #[instrument(skip(self))]
     fn remove_trading_pair(&mut self, pair: &TradingPair) -> Option<crate::orderbook::OrderBook> {
         self.inner.remove_trading_pair(pair)
     }
 
+    /// Writes `AddUser` to WAL, then delegates to [`CoreEngine`].
     #[instrument(skip(self, user), fields(user_id = %user.get_user_id()))]
     fn add_user(&mut self, user: User) {
         if let Err(e) = self.wal.append(WalOperation::AddUser { user: user.clone() }) {
@@ -350,11 +366,13 @@ impl ExchangeEngine for WalEngine {
         self.inner.add_user(user);
     }
 
+    /// Delegates to [`CoreEngine`] (no WAL entry — not critical for V1 recovery).
     #[instrument(skip(self))]
     fn remove_user(&mut self, user_id: &UserId) -> Option<User> {
         self.inner.remove_user(user_id)
     }
 
+    /// Writes `Deposit` to WAL, then delegates to [`CoreEngine`].
     #[instrument(skip(self), fields(user_id = %user_id))]
     fn deposit(
         &mut self,
@@ -369,6 +387,7 @@ impl ExchangeEngine for WalEngine {
         self.inner.deposit(user_id, asset, amount)
     }
 
+    /// Generates a snowflake ID, writes `PlaceOrder` to WAL, then delegates to [`CoreEngine`].
     #[instrument(skip(self, order), fields(user_id = %user_id, pair = %pair))]
     fn add_order(
         &mut self,
@@ -392,6 +411,7 @@ impl ExchangeEngine for WalEngine {
         self.inner.add_order(user_id, pair, order)
     }
 
+    /// Writes `CancelOrder` to WAL, then delegates to [`CoreEngine`].
     #[instrument(skip(self))]
     fn cancel_order(&mut self, pair: &TradingPair, order_id: &OrderId) -> bool {
         if let Err(e) = self.wal.append(WalOperation::CancelOrder { pair: *pair, order_id: *order_id }) {
@@ -400,6 +420,7 @@ impl ExchangeEngine for WalEngine {
         self.inner.cancel_order(pair, order_id)
     }
 
+    /// Generates a new ID, writes a single `ModifyOrder` to WAL, then cancels old + places new via [`CoreEngine`].
     #[instrument(skip(self, modify_order), fields(order_id = modify_order.get_order_id()))]
     fn modify_order(
         &mut self,
@@ -447,14 +468,17 @@ impl ExchangeEngine for WalEngine {
         Some(result)
     }
 
+    /// Delegates to [`CoreEngine`] (read-only, no WAL entry).
     fn get_order_info(&self, pair: &TradingPair) -> Option<OrderBookLevelInfo> {
         self.inner.get_order_info(pair)
     }
 
+    /// Delegates to [`CoreEngine`] (read-only, no WAL entry).
     fn size(&self, pair: &TradingPair) -> Option<usize> {
         self.inner.size(pair)
     }
 
+    /// Delegates to [`CoreEngine`] (read-only, no WAL entry).
     fn get_user_balance(
         &self,
         user_id: &UserId,

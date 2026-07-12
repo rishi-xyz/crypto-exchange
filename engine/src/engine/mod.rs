@@ -12,7 +12,7 @@
 //!   otherwise         → CoreEngine
 //! ```
 //!
-//! [`CoreEngine`] owns orderbooks, users, and the snowflake ID generator.
+//! [`CoreEngine`](crate::engine::CoreEngine) owns orderbooks, users, and the snowflake ID generator.
 //! It performs the actual mutations — balance locking, order matching, fill settlement.
 //! It does **not** write to the WAL or generate order IDs; those are concerns of
 //! the [`WalEngine`](crate::wal::WalEngine) wrapper.
@@ -59,25 +59,52 @@ pub struct AddOrderResult {
 /// Both [`CoreEngine`] and [`WalEngine`](crate::wal::WalEngine) implement this trait.
 /// Callers use the trait to stay decoupled from the specific implementation.
 pub trait ExchangeEngine {
+    /// Registers a new trading pair. Creates an empty orderbook if one doesn't exist.
     fn add_trading_pair(&mut self, pair: TradingPair);
+
+    /// Removes a trading pair and its entire orderbook.
     fn remove_trading_pair(&mut self, pair: &TradingPair) -> Option<OrderBook>;
+
+    /// Registers a new user in the engine.
     fn add_user(&mut self, user: User);
+
+    /// Removes a user from the engine.
     fn remove_user(&mut self, user_id: &UserId) -> Option<User>;
+
+    /// Credits a user's balance for the given asset.
     fn deposit(&mut self, user_id: UserId, asset: Asset, amount: Quantity) -> Result<(), String>;
+
+    /// Places a new order into the engine.
+    ///
+    /// The order must already have a valid ID set — callers are responsible
+    /// for ID generation (typically via [`WalEngine`](crate::wal::WalEngine)).
     fn add_order(
         &mut self,
         user_id: UserId,
         pair: &TradingPair,
         order: OrderPointer,
     ) -> Result<Option<AddOrderResult>, String>;
+
+    /// Cancels a resting order. Returns `true` if found and cancelled.
     fn cancel_order(&mut self, pair: &TradingPair, order_id: &OrderId) -> bool;
+
+    /// Modifies an existing order via cancel-replace.
+    ///
+    /// Writes a single WAL entry (if applicable), cancels the old order,
+    /// and places a new one with a fresh ID.
     fn modify_order(
         &mut self,
         pair: &TradingPair,
         modify_order: OrderModify,
     ) -> Option<AddOrderResult>;
+
+    /// Returns a depth snapshot of the order book for the given pair.
     fn get_order_info(&self, pair: &TradingPair) -> Option<OrderBookLevelInfo>;
+
+    /// Returns the total number of resting orders for the given pair.
     fn size(&self, pair: &TradingPair) -> Option<usize>;
+
+    /// Returns a user's balances across all assets as `HashMap<Asset, (available, locked)>`.
     fn get_user_balance(
         &self,
         user_id: &UserId,
@@ -90,8 +117,9 @@ pub trait ExchangeEngine {
 
 /// The core matching engine — coordinates orderbooks, users, and ID generation.
 ///
-/// Does **not** write to the WAL or generate order IDs.
-/// The [`WalEngine`](crate::wal::WalEngine) wrapper handles those concerns.
+/// Contains pure business logic with no WAL awareness. While it includes an
+/// internal ID generator, order ID *assignment* is the responsibility of
+/// [`WalEngine`](crate::wal::WalEngine) which wraps this struct.
 #[derive(Debug)]
 pub struct CoreEngine {
     orderbooks: HashMap<TradingPair, OrderBook>,
@@ -100,6 +128,7 @@ pub struct CoreEngine {
 }
 
 impl CoreEngine {
+    /// Creates a new engine with no WAL (dev/test mode).
     pub fn new() -> Self {
         info!("CoreEngine initialized");
         CoreEngine {
@@ -353,7 +382,8 @@ impl ExchangeEngine for CoreEngine {
 
     /// Modifies an existing order via cancel-replace.
     ///
-    /// Expects the new order to already have a valid ID set.
+    /// Constructs a new order from the modify request parameters, cancels the
+    /// old order, and places the new one.
     #[instrument(skip(self, modify_order), fields(order_id = modify_order.get_order_id()))]
     fn modify_order(
         &mut self,

@@ -1,4 +1,4 @@
-//! The [`Order`] struct — a single limit order in the exchange.
+//! The [`Order`](crate::order::Order) struct — a single limit order in the exchange.
 //!
 //! An order represents a intent to buy or sell a specific quantity of an asset
 //! at a specific price. Orders live inside an [`OrderBook`](crate::orderbook::OrderBook)
@@ -12,8 +12,8 @@
 //! new() → Engine assigns snowflake ID → enters book → cancelled → removed
 //! ```
 //!
-//! The `order_id` passed to [`Order::new`] is always a placeholder (`0`).
-//! The [`Engine`](crate::matching_engine::Engine) calls [`set_order_id`](Order::set_order_id)
+//! The `order_id` passed to [`Order::new`](crate::order::Order::new) is always a placeholder (`0`).
+//! The [`CoreEngine`](crate::engine::CoreEngine) calls [`Order::set_order_id`](crate::order::Order::set_order_id)
 //! to stamp a real snowflake ID before the order enters the book.
 
 use std::{collections::VecDeque, sync::{Arc, Mutex}, time::{SystemTime, UNIX_EPOCH}};
@@ -227,9 +227,9 @@ impl Order {
 
     /// Overwrites the order's ID with the given snowflake ID.
     ///
-    /// Called by the [`Engine`](crate::matching_engine::Engine) after construction
+    /// Called by the [`WalEngine`](crate::wal::WalEngine) after construction
     /// to assign the real engine-generated ID. This replaces the placeholder `0`
-    /// that was passed to [`new`](Order::new).
+    /// that was passed to [`Order::new`](crate::order::Order::new).
     pub fn set_order_id(&mut self, id: OrderId) {
         trace!(old_id = self.order_id, new_id = id, "Order ID stamped");
         self.order_id = id;

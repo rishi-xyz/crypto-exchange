@@ -1,6 +1,6 @@
 //! User account and balance management.
 //!
-//! Each [`User`] tracks balances across all assets and manages locked funds
+//! Each [`User`](crate::users::User) tracks balances across all assets and manages locked funds
 //! for resting orders. The locking protocol ensures users cannot spend funds
 //! that are committed to open orders.
 //!
@@ -37,7 +37,7 @@ pub struct LockEntry {
 /// A user account with balance and order-lock tracking.
 ///
 /// Users are identified by UUID and managed by the
-/// [`Engine`](crate::matching_engine::Engine). Each user has:
+/// [`CoreEngine`](crate::engine::CoreEngine). Each user has:
 ///
 /// - **Balances** — total amount of each asset held
 /// - **Locked orders** — funds committed to resting orders, keyed by order ID
@@ -83,7 +83,7 @@ impl User {
 
     /// Credits the user's balance for the given asset.
     ///
-    /// Called by [`Engine::deposit`](crate::matching_engine::Engine::deposit)
+    /// Called by [`ExchangeEngine::deposit`](crate::engine::ExchangeEngine::deposit)
     /// when a user deposits funds.
     ///
     /// # Arguments

@@ -23,7 +23,7 @@ pub type Quantity = u32;
 /// Unique identifier for an order, assigned by the engine via snowflake generation.
 ///
 /// Callers pass `0` as a placeholder in [`Order::new`](crate::order::Order::new);
-/// the [`Engine`](crate::matching_engine::Engine) overwrites it with a real snowflake ID
+/// the [`CoreEngine`](crate::engine::CoreEngine) overwrites it with a real snowflake ID
 /// before the order enters the book.
 pub type OrderId = u64;
 

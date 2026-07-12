@@ -2,8 +2,8 @@
 //!
 //! Provides two entry points:
 //!
-//! - [`init()`] — production setup: dual-output (JSON to stdout + daily rolling log file)
-//! - [`init_test()`] — test setup: all output suppressed to `sink`
+//! - [`logging::init()`](crate::logging::init) — production setup: dual-output (JSON to stdout + daily rolling log file)
+//! - [`logging::init_test()`](crate::logging::init_test) — test setup: all output suppressed to `sink`
 //!
 //! # Output Format
 //!

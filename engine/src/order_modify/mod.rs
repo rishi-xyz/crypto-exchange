@@ -1,6 +1,6 @@
 //! Cancel-replace order modification request.
 //!
-//! An [`OrderModify`] represents a request to replace an existing order with a new
+//! An [`OrderModify`](crate::order_modify::OrderModify) represents a request to replace an existing order with a new
 //! one at a different price, quantity, or both. The engine cancels the old order
 /// and creates a new one with a fresh snowflake ID.
 

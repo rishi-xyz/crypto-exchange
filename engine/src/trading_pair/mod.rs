@@ -1,6 +1,6 @@
 //! Trading pair identifier — a base/quote asset combination.
 //!
-//! Each [`OrderBook`](crate::orderbook::OrderBook) is keyed by a [`TradingPair`].
+//! Each [`OrderBook`](crate::orderbook::OrderBook) is keyed by a [`TradingPair`](crate::trading_pair::TradingPair).
 //! For example, `ETH-USDC` means "trade ETH (base) for USDC (quote)".
 
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use crate::types::Asset;
 /// The base asset is what is being traded; the quote asset is what it is priced in.
 ///
 /// Implements `Hash` and `Eq` so it can be used as a `HashMap` key
-/// in [`Engine::orderbooks`](crate::matching_engine::Engine).
+/// in [`CoreEngine::orderbooks`](crate::engine::CoreEngine).
 ///
 /// # Examples
 ///
