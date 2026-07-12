@@ -1,3 +1,40 @@
+//! Write-ahead log for crash recovery.
+//!
+//! Every engine mutation is written to a local file as a newline-delimited JSON line
+//! ([JSONL](https://jsonlines.org/)) **before** the mutation is applied. On startup,
+//! the WAL is replayed to reconstruct engine state, then truncated.
+//!
+//! # Format
+//!
+//! Each line is a serialized [`WalEntry`]:
+//!
+//! ```text
+//! {"sequence":1,"operation":{"AddTradingPair":{"pair":{"base":"ETH","quote":"USDC"}}},"timestamp":1700000000000000000}
+//! {"sequence":2,"operation":{"AddUser":{"user":{...}}},"timestamp":1700000000000001000}
+//! ```
+//!
+//! # Lifecycle
+//!
+//! ```text
+//! Engine::new_with_wal(path)
+//!   ├─ Wal::replay(path)        → read all entries
+//!   ├─ replay each entry        → reconstruct state via _inner methods
+//!   ├─ Wal::open(path)          → open fresh WAL
+//!   ├─ wal.truncate()           → clear old entries
+//!   └─ engine.wal = Some(wal)   → ready for new writes
+//!
+//! engine.add_order(...)
+//!   ├─ wal.append(PlaceOrder)   → write-ahead
+//!   └─ add_order_inner(...)     → mutate state
+//! ```
+//!
+//! # Crash Safety
+//!
+//! - Entries are `flush()`ed to disk before every mutation.
+//! - Partial/corrupt lines (from crash mid-write) are skipped during replay.
+//! - Sequence numbers are monotonically increasing for ordering guarantees.
+//! - The WAL is truncated after successful replay — no compaction needed.
+
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
@@ -13,45 +50,95 @@ use crate::{
     users::User,
 };
 
+/// All mutating operations that can be written to the WAL.
+///
+/// Each variant corresponds to exactly one public method on [`Engine`](crate::matching_engine::Engine).
+/// The operation is written to disk **before** the mutation is applied, ensuring
+/// durability even if the process crashes mid-mutation.
+///
+/// # Replay
+///
+/// During startup, [`Wal::replay`] reads these entries and the engine re-executes
+/// each one via the corresponding `_inner` method.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WalOperation {
+    /// Credits a user's balance. Corresponds to [`Engine::deposit`](crate::matching_engine::Engine::deposit).
     Deposit {
         user_id: UserId,
         asset: Asset,
         amount: Quantity,
     },
+    /// Places a new order into the matching engine. Corresponds to [`Engine::add_order`](crate::matching_engine::Engine::add_order).
+    ///
+    /// Includes the [`TradingPair`] because during replay the order hasn't been
+    /// inserted into the book yet, so the pair can't be inferred from book state.
     PlaceOrder {
         pair: TradingPair,
         order: Order,
     },
+    /// Cancels a resting order. Corresponds to [`Engine::cancel_order`](crate::matching_engine::Engine::cancel_order).
     CancelOrder {
         pair: TradingPair,
         order_id: OrderId,
     },
+    /// Modifies an order via cancel-replace. Corresponds to [`Engine::modify_order`](crate::matching_engine::Engine::modify_order).
+    ///
+    /// Written as a **single** entry (not separate cancel + place) to avoid
+    /// replay ordering issues. During replay, the engine cancels the old order
+    /// and places the new one.
     ModifyOrder {
         pair: TradingPair,
         old_order_id: OrderId,
         new_order: Order,
     },
+    /// Adds a new trading pair to the engine. Corresponds to [`Engine::add_trading_pair`](crate::matching_engine::Engine::add_trading_pair).
     AddTradingPair {
         pair: TradingPair,
     },
+    /// Registers a new user. Corresponds to [`Engine::add_user`](crate::matching_engine::Engine::add_user).
     AddUser {
         user: User,
     },
 }
 
+/// A single entry in the write-ahead log.
+///
+/// Serialized as one JSON line per entry. Entries are ordered by [`sequence`]
+/// (monotonically increasing) and timestamped at write time.
+///
+/// [`sequence`]: WalEntry::sequence
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalEntry {
+    /// Monotonically increasing sequence number. Used for ordering and crash detection.
     pub sequence: u64,
+    /// The mutation to replay.
     pub operation: WalOperation,
+    /// Nanosecond epoch timestamp of when the entry was written.
     pub timestamp: u64,
 }
 
+/// Append-only write-ahead log backed by a JSONL file.
+///
+/// Writes are buffered via [`BufWriter`] and explicitly `flush()`ed after each
+/// entry to guarantee durability. The WAL tracks a [`sequence`] counter that
+/// resumes from the last entry on open.
+///
+/// [`sequence`]: Wal::sequence
+///
+/// # Usage
+///
+/// ```text
+/// let mut wal = Wal::open(Path::new("engine.wal"))?;
+/// wal.append(WalOperation::Deposit { ... })?;
+/// // Mutation applied after WAL write succeeds
+/// ```
 #[derive(Debug)]
 pub struct Wal {
+    /// Buffered file writer — entries are flushed after each append.
     file: BufWriter<File>,
+    /// Path to the WAL file on disk, used for truncation and re-opening.
     path: std::path::PathBuf,
+    /// Current sequence counter — incremented on each append, resumed from file on open.
     sequence: u64,
 }
 

@@ -379,19 +379,26 @@ impl Engine {
 
     // =========================================================================
     // Private _inner methods — core logic, no WAL writes
+    //
+    // Public methods (add_order, cancel_order, etc.) write WAL entries first,
+    // then delegate to these _inner methods for the actual state mutation.
+    // During WAL replay, these are called directly (bypassing WAL writes).
     // =========================================================================
 
+    /// Core logic for adding a trading pair. Creates an empty orderbook if one doesn't exist.
     fn add_trading_pair_inner(&mut self, pair: TradingPair) {
         self.orderbooks.entry(pair).or_insert(OrderBook::new());
         info!(pair = %pair, "Trading pair added");
     }
 
+    /// Core logic for registering a user. Inserts into the users map.
     fn add_user_inner(&mut self, user: User) {
         let id = user.get_user_id();
         self.users.insert(id, user);
         info!(user_id = %id, "User registered");
     }
 
+    /// Core logic for crediting a user's balance. Returns `Err` if user not found.
     fn deposit_inner(
         &mut self,
         user_id: UserId,
@@ -412,6 +419,32 @@ impl Engine {
         }
     }
 
+    /// Core logic for placing an order. This is the most complex method in the engine.
+    ///
+    /// # Flow
+    ///
+    /// 1. **Read order parameters** — side, price, quantity, order ID
+    /// 2. **Lock balance** — buy locks quote asset (`price * qty`), sell locks base asset (`qty`)
+    /// 3. **Add to orderbook** — delegates to [`OrderBook::add_order`] which attempts matching
+    /// 4. **Stamp trades** — if matched, assigns snowflake trade IDs and nanosecond timestamps
+    /// 5. **Settle fills** — updates buyer/seller balances via [`User::apply_fill`]:
+    ///    - Buyer: debit locked quote, credit base
+    ///    - Seller: debit locked base, credit quote
+    /// 6. **Unlock unfilled** — if the incoming order was fully consumed (no longer in book),
+    ///    its remaining locked balance is unlocked
+    /// 7. **No match** — if no resting orders matched, the order rests in the book
+    ///    and locked balance stays locked
+    ///
+    /// # Replay Mode
+    ///
+    /// When [`replay_mode`](Engine::replay_mode) is `true`, the order's existing
+    /// snowflake ID is used as-is (not regenerated). This ensures replay produces
+    /// identical state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the user is not found, the trading pair doesn't exist,
+    /// or the balance lock fails (insufficient funds).
     fn add_order_inner(
         &mut self,
         user_id: UserId,
@@ -548,6 +581,10 @@ impl Engine {
         }
     }
 
+    /// Core logic for cancelling a resting order.
+    ///
+    /// Removes the order from the orderbook and unlocks the user's frozen balance.
+    /// Returns `true` if the order was found and cancelled, `false` if not found.
     fn cancel_order_inner(&mut self, pair: &TradingPair, order_id: &OrderId) -> bool {
         let order = match self
             .orderbooks

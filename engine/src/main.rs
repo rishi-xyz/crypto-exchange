@@ -26,6 +26,7 @@ use engine::{
     users::User,
 };
 
+/// Helper: creates a GoodTillCancel limit order and places it. Panics on failure.
 fn place(
     engine: &mut Engine,
     user_id: UserId,
@@ -63,6 +64,7 @@ fn place(
     }
 }
 
+/// Helper: creates a FillAndKill limit order and places it. Returns `None` if rejected (no match).
 fn place_fak(
     engine: &mut Engine,
     user_id: UserId,

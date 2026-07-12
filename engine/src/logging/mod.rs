@@ -1,8 +1,43 @@
+//! Structured logging initialization using [`tracing`].
+//!
+//! Provides two entry points:
+//!
+//! - [`init()`] — production setup: dual-output (JSON to stdout + daily rolling log file)
+//! - [`init_test()`] — test setup: all output suppressed to `sink`
+//!
+//! # Output Format
+//!
+//! All logs are JSON-formatted for machine parsing. Each line includes:
+//! `timestamp`, `level`, `message`, `target`, `filename`, `line_number`,
+//! and structured `span` data from `#[instrument]` annotations.
+//!
+//! # Log Files
+//!
+//! Logs are written to `logs/engine.YYYY-MM-DD.log` in the workspace root,
+//! rotated daily via [`tracing-appender`](https://docs.rs/tracing-appender).
+//!
+//! # Configuration
+//!
+//! The log level is controlled by the `RUST_LOG` environment variable.
+//! Defaults to `info,engine=debug` (engine crate at debug level, everything else at info).
+
 use std::fs;
 
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+/// Initializes the tracing subscriber for production use.
+///
+/// Sets up two JSON-output layers:
+/// 1. **stdout** — for container/orchestrator log collection
+/// 2. **File** — daily rolling file at `logs/engine.YYYY-MM-DD.log`
+///
+/// The log level is read from `RUST_LOG` (e.g. `RUST_LOG=debug`).
+/// Falls back to `info,engine=debug` if unset.
+///
+/// # Panics
+///
+/// Panics if the tracing subscriber fails to initialize (typically called twice).
 pub fn init() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,engine=debug"));
@@ -49,6 +84,11 @@ pub fn init() {
         .init();
 }
 
+/// Initializes tracing for tests with all output suppressed.
+///
+/// Uses `std::io::sink` as the writer so no log output appears during test runs.
+/// Respects `RUST_LOG` for filter level, but output is discarded regardless.
+/// Safe to call multiple times (uses `try_init`).
 pub fn init_test() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
