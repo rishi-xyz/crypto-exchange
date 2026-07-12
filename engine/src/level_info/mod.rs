@@ -1,8 +1,10 @@
 use std::{collections::VecDeque, sync::Arc};
 
+use serde::{Deserialize, Serialize};
+
 use crate::types::{Price, Quantity};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LevelInfo {
     pub price : Price,
     pub quantity : Quantity
@@ -15,6 +17,7 @@ impl LevelInfo {
 }
 
 pub type LevelInfos = Arc<VecDeque<LevelInfo>>;
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderBookLevelInfo {
     bids : LevelInfos,
     asks : LevelInfos,

@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{order::Order, types::{OrderId, OrderStatus, OrderType, Price, Quantity, Side, UserId}};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderModify {
     order_id: OrderId,
     price: Price,

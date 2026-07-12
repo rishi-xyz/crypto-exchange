@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::types::{Asset, OrderId, Quantity, UserId};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockEntry {
     pub asset: Asset,
     pub amount: Quantity,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     id: UserId,
     locked_orders: HashMap<OrderId, LockEntry>,

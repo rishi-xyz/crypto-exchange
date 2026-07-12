@@ -1,8 +1,10 @@
 use std::{collections::VecDeque, sync::Arc};
 
+use serde::{Deserialize, Serialize};
+
 use crate::types::{OrderId, Price, Quantity, UserId};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeInfo {
     order_id: OrderId,
     price: Price,
@@ -31,7 +33,7 @@ impl TradeInfo {
 
 type TradeInfoPointer = Arc<TradeInfo>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trade {
     bid_trade: TradeInfoPointer,
     ask_trade: TradeInfoPointer,

@@ -1,7 +1,9 @@
 use std::{collections::VecDeque, sync::{Arc, Mutex}, time::{SystemTime, UNIX_EPOCH}};
+use serde::{Deserialize, Serialize};
+
 use crate::types::{OrderId, OrderStatus, OrderType, Price, Quantity, Side, UserId};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Order {
     order_id: OrderId,
     order_type: OrderType,
