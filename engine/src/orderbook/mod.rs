@@ -114,9 +114,10 @@ impl OrderBook {
     /// # Panics
     ///
     /// Panics if a mutex on an order is poisoned (should not happen in normal operation).
-    fn match_order(&mut self) ->Trades {
+    fn match_order(&mut self, _aggressor_user_id: UserId, aggressor_side: Side ) ->Trades {
         let mut trades:Trades = Trades::new();
         trades.reserve(self.orders_map.len()/2);
+        let mut self_trade_blocked = false;
         loop {
             if self.bids_map.is_empty() || self.asks_map.is_empty(){ break; }
             let bid_price:Price = *self.bids_map.last_key_value().unwrap().0;
@@ -124,9 +125,36 @@ impl OrderBook {
             if bid_price < ask_price { break; }
             let bids:&mut VecDeque<Arc<Mutex<Order>>> = self.bids_map.get_mut(&bid_price).unwrap();
             let asks:&mut VecDeque<Arc<Mutex<Order>>> = self.asks_map.get_mut(&ask_price).unwrap();
+            let initial_asks_len = asks.len();
+            let initial_bids_len = bids.len();
+            let mut skipped = 0;
             while bids.len() != 0 && asks.len() != 0 {
                 let mut bid: MutexGuard<'_, Order> = bids.front().unwrap().lock().unwrap();
                 let mut ask: MutexGuard<'_, Order> = asks.front().unwrap().lock().unwrap();
+                if bid.get_user_id() == ask.get_user_id() {
+                    // Self trade: same user on both sides
+                    drop(bid);
+                    drop(ask);
+                    match aggressor_side {
+                        Side::Buy => {
+                            //aggressor is buying , has a resting order on ask
+                            // pop ask and push to back of queue
+                            let resting_order = asks.pop_front().unwrap();
+                            asks.push_back(resting_order);
+                            skipped += 1;
+                            if skipped >= initial_asks_len { self_trade_blocked = true; break; }
+                        }
+                        Side::Sell => {
+                            //aggressor is selling , has a resting order on bids
+                            // pop bids and push to back of queue
+                            let resting_order = bids.pop_front().unwrap();
+                            bids.push_back(resting_order);
+                            skipped += 1;
+                            if skipped >= initial_bids_len { self_trade_blocked = true; break; }
+                        }
+                    }
+                    continue;
+                }
                 let quantity: Quantity = min(
                     bid.get_remaining_quantity(),
                     ask.get_remaining_quantity()
@@ -167,6 +195,7 @@ impl OrderBook {
             if asks.is_empty(){
                 self.asks_map.remove(&ask_price);
             }
+            if self_trade_blocked { break; }
         }
         if !self.bids_map.is_empty()  {
             let bid_price:Price = *self.bids_map.last_key_value().unwrap().0;
@@ -245,13 +274,14 @@ impl OrderBook {
     /// Trade IDs and timestamps in the returned trades are placeholders (`0`).
     /// The [`Engine`](crate::matching_engine::Engine) stamps real values afterward.
     pub fn add_order(&mut self,order: OrderPointer) ->Option<Trades> {
-        let (order_id, order_type,order_side,order_price) = {
+        let (order_id, order_type,order_side,order_price, order_user_id) = {
             let order = order.lock().unwrap();
             (
                 order.get_order_id(),
                 order.get_type(),
                 order.get_side(), 
-                order.get_price()
+                order.get_price(),
+                order.get_user_id()
             )
         };
         if self.orders_map.contains_key(&order_id) { return None  }; 
@@ -262,7 +292,7 @@ impl OrderBook {
             Side::Sell => self.asks_map.entry(order_price).or_default(),
         };
         level.push_back(order);
-        Some(self.match_order())
+        Some(self.match_order(order_user_id, order_side))
     }
     
     /// Modifies an existing order by cancel-replace.

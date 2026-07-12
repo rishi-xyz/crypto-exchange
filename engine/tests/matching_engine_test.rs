@@ -371,3 +371,78 @@ fn test_trade_ids_are_unique() {
 
     assert_ne!(tid1, tid2);
 }
+
+// ---------------------------------------------------------------------------
+// Self-trade prevention
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_self_trade_prevention_buy_skips_own_sell() {
+    let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
+
+    place_limit(&mut engine, &pair, user_a(), Side::Sell, 2000, 10);
+    let result = place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 5);
+
+    assert!(result.as_ref().unwrap().trades.as_ref().unwrap().is_empty(), "no trades from self-trade");
+    assert_eq!(engine.size(&pair), Some(2), "both orders still in book");
+}
+
+#[test]
+fn test_self_trade_prevention_sell_skips_own_buy() {
+    let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
+
+    place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 10);
+    let result = place_limit(&mut engine, &pair, user_a(), Side::Sell, 2000, 5);
+
+    assert!(result.as_ref().unwrap().trades.as_ref().unwrap().is_empty(), "no trades from self-trade");
+    assert_eq!(engine.size(&pair), Some(2), "both orders still in book");
+}
+
+#[test]
+fn test_cross_user_trade_unaffected() {
+    let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
+
+    place_limit(&mut engine, &pair, user_a(), Side::Sell, 2000, 10);
+    let result = place_limit(&mut engine, &pair, user_b(), Side::Buy, 2000, 5);
+
+    assert_eq!(result.as_ref().unwrap().trades.as_ref().unwrap().len(), 1, "normal cross-user trade");
+    assert_eq!(engine.size(&pair), Some(1), "sell has 5 remaining");
+}
+
+#[test]
+fn test_self_trade_skip_then_match_different_user() {
+    let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
+
+    place_limit(&mut engine, &pair, user_a(), Side::Sell, 2000, 10);
+    place_limit(&mut engine, &pair, user_b(), Side::Sell, 2000, 10);
+
+    let result = place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 5);
+
+    assert_eq!(result.as_ref().unwrap().trades.as_ref().unwrap().len(), 1, "matched only user B");
+    assert_eq!(engine.size(&pair), Some(2), "A sell (10) + B sell (5) remaining");
+}
+
+#[test]
+fn test_self_trade_skips_all_own_orders() {
+    let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
+
+    place_limit(&mut engine, &pair, user_a(), Side::Sell, 2000, 5);
+    place_limit(&mut engine, &pair, user_a(), Side::Sell, 2000, 5);
+
+    let result = place_limit(&mut engine, &pair, user_a(), Side::Buy, 2000, 10);
+
+    assert!(result.as_ref().unwrap().trades.as_ref().unwrap().is_empty(), "all skipped");
+    assert_eq!(engine.size(&pair), Some(3), "2 sells + 1 buy all resting");
+}
+
+#[test]
+fn test_self_trade_fak_no_match() {
+    let (mut engine, pair) = new_engine(TradingPair::new(Asset::ETH, Asset::USDC));
+
+    place_limit(&mut engine, &pair, user_a(), Side::Sell, 2000, 10);
+    let result = place_fak(&mut engine, &pair, user_a(), Side::Buy, 2000, 5);
+
+    assert!(result.is_some(), "FAK placed but not filled");
+    assert!(result.as_ref().unwrap().trades.as_ref().unwrap().is_empty(), "no trades from self-trade");
+    assert_eq!(engine.size(&pair), Some(1), "only A's sell remains — FAK buy was cancelled");
+}
