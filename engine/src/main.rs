@@ -14,6 +14,7 @@
 //!
 //! Run with `cargo run` from the `engine/` directory.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use engine::{
@@ -119,7 +120,7 @@ fn main() {
 
     tracing::info!("Matching engine demo starting");
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new_with_wal(Path::new("engine.wal"));
     let eth_usdc = TradingPair::new(Asset::ETH, Asset::USDC);
     let sol_usdc = TradingPair::new(Asset::SOL, Asset::USDC);
     engine.add_trading_pair(eth_usdc);

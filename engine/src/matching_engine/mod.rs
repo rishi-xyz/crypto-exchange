@@ -18,15 +18,19 @@
 //!
 //! This is simple, correct, and sufficient for V1 single-instance deployment.
 //!
-//! # ID Generation
+//! # WAL (Write-Ahead Log)
 //!
-//! The engine owns a [`SnowflakeGenerator`] and stamps IDs on:
-//! - **Orders** — via `set_order_id()` after construction
-//! - **Trades** — via `set_trade_id()` and `set_timestamp()` after the book produces them
+//! When constructed via [`Engine::new_with_wal`], every mutation is written to a
+//! WAL file **before** being applied. On restart, the WAL is replayed to reconstruct
+//! state. The WAL uses synchronous, blocking I/O with `flush()` to guarantee durability.
 //!
-//! Callers never supply real IDs — the `order_id` passed to `Order::new()` is always `0`.
+//! Public methods (`add_order`, `cancel_order`, etc.) write WAL entries and then
+//! delegate to private `_inner` methods that contain the core logic. The
+//! `modify_order` method writes a single `ModifyOrder` entry and calls the `_inner`
+//! versions directly, avoiding redundant WAL writes.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing::{debug, error, info, instrument, warn};
@@ -41,6 +45,7 @@ use crate::{
     trading_pair::TradingPair,
     types::{Asset, OrderId, Quantity, Side, UserId},
     users::User,
+    wal::{Wal, WalOperation},
 };
 
 use std::sync::{Arc, Mutex};
@@ -82,37 +87,120 @@ pub struct Engine {
     users: HashMap<UserId, User>,
     /// Snowflake ID generator for orders and trades
     id_generator: SnowflakeGenerator,
+    /// Write-ahead log for crash recovery. None = no WAL (tests, dev).
+    wal: Option<Wal>,
+    /// When true, `add_order_inner` uses the order's existing ID instead of generating a new one.
+    /// Set to true during WAL replay.
+    replay_mode: bool,
 }
 
 impl Engine {
-    /// Creates a new engine with no pairs, no users, and a fresh ID generator.
-    ///
-    /// The ID generator is initialized with `machine_id=1, datacenter_id=1`.
-    /// For multi-instance deployments, you'd pass different `machine_id`/`datacenter_id`
-    /// values (not yet implemented).
+    /// Creates a new engine with no WAL (dev/test mode).
     pub fn new() -> Self {
-        info!("Engine initialized");
+        info!("Engine initialized (no WAL)");
         Engine {
             orderbooks: HashMap::new(),
             users: HashMap::new(),
             id_generator: SnowflakeGenerator::new(1, 1),
+            wal: None,
+            replay_mode: false,
         }
     }
 
-    /// Registers a new trading pair.
+    /// Creates an engine with WAL-backed crash recovery.
     ///
-    /// Creates an empty [`OrderBook`] for the pair. Orders can only be placed
-    /// after the pair has been registered.
+    /// 1. Replays existing WAL entries to reconstruct state
+    /// 2. Truncates the WAL (fresh start)
+    /// 3. Opens the WAL for new append-only writes
+    pub fn new_with_wal(path: &Path) -> Self {
+        let entries = match Wal::replay(path) {
+            Ok(entries) => entries,
+            Err(e) => {
+                error!(error = %e, "WAL replay failed — starting fresh");
+                Vec::new()
+            }
+        };
+
+        let mut engine = Engine {
+            orderbooks: HashMap::new(),
+            users: HashMap::new(),
+            id_generator: SnowflakeGenerator::new(1, 1),
+            wal: None,
+            replay_mode: true,
+        };
+
+        let mut replayed = 0u64;
+        for entry in &entries {
+            match engine.replay_entry(entry) {
+                Ok(()) => replayed += 1,
+                Err(e) => {
+                    warn!(
+                        sequence = entry.sequence,
+                        error = %e,
+                        "WAL entry replay failed — skipping"
+                    );
+                }
+            }
+        }
+        engine.replay_mode = false;
+
+        // Truncate old WAL, open fresh for appending
+        let mut wal = Wal::open(path).expect("Failed to open WAL after replay");
+        let _ = wal.truncate();
+        engine.wal = Some(wal);
+
+        info!(replayed, "Engine initialized with WAL recovery");
+        engine
+    }
+
+    /// Replays a single WAL entry during startup.
+    fn replay_entry(&mut self, entry: &crate::wal::WalEntry) -> Result<(), String> {
+        match &entry.operation {
+            WalOperation::AddTradingPair { pair } => {
+                self.add_trading_pair_inner(*pair);
+                Ok(())
+            }
+            WalOperation::AddUser { user } => {
+                self.add_user_inner(user.clone());
+                Ok(())
+            }
+            WalOperation::Deposit { user_id, asset, amount } => {
+                self.deposit_inner(*user_id, *asset, *amount)
+            }
+            WalOperation::PlaceOrder { pair, order } => {
+                let user_id = order.get_user_id();
+                let order_ptr: OrderPointer = Arc::new(Mutex::new(*order));
+                self.add_order_inner(user_id, pair, order_ptr)?;
+                Ok(())
+            }
+            WalOperation::CancelOrder { pair, order_id } => {
+                self.cancel_order_inner(pair, order_id);
+                Ok(())
+            }
+            WalOperation::ModifyOrder { pair, old_order_id, new_order } => {
+                self.cancel_order_inner(pair, old_order_id);
+                let user_id = new_order.get_user_id();
+                let order_ptr: OrderPointer = Arc::new(Mutex::new(*new_order));
+                self.add_order_inner(user_id, pair, order_ptr)?;
+                Ok(())
+            }
+        }
+    }
+
+    // =========================================================================
+    // Public methods — write WAL then delegate to _inner
+    // =========================================================================
+
+    /// Registers a new trading pair.
     #[instrument(skip(self))]
     pub fn add_trading_pair(&mut self, pair: TradingPair) {
-        self.orderbooks.entry(pair).or_insert(OrderBook::new());
-        info!(pair = %pair, "Trading pair added");
+        if let Some(ref mut wal) = self.wal {
+            let _ = wal.append(WalOperation::AddTradingPair { pair });
+        }
+        self.add_trading_pair_inner(pair);
     }
 
     /// Removes a trading pair and its entire orderbook.
-    ///
-    /// All resting orders in the book are lost. In production, you'd want
-    /// to cancel all orders and unlock their balances first.
     #[instrument(skip(self))]
     pub fn remove_trading_pair(&mut self, pair: &TradingPair) -> Option<OrderBook> {
         let removed = self.orderbooks.remove(pair);
@@ -121,13 +209,12 @@ impl Engine {
     }
 
     /// Registers a new user in the engine.
-    ///
-    /// The user must already have a UUID (from [`User::new`]).
     #[instrument(skip(self, user), fields(user_id = %user.get_user_id()))]
     pub fn add_user(&mut self, user: User) {
-        let id = user.get_user_id();
-        self.users.insert(id, user);
-        info!(user_id = %id, "User registered");
+        if let Some(ref mut wal) = self.wal {
+            let _ = wal.append(WalOperation::AddUser { user: user.clone() });
+        }
+        self.add_user_inner(user);
     }
 
     /// Removes a user from the engine.
@@ -139,12 +226,6 @@ impl Engine {
     }
 
     /// Credits a user's balance for the given asset.
-    ///
-    /// Called by the Go API layer after a blockchain deposit is confirmed.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err("User not found")` if the user doesn't exist.
     #[instrument(skip(self), fields(user_id = %user_id))]
     pub fn deposit(
         &mut self,
@@ -152,24 +233,128 @@ impl Engine {
         asset: Asset,
         amount: Quantity,
     ) -> Result<(), String> {
-        let user = self.users.get_mut(&user_id);
-        match user {
-            Some(u) => {
-                u.add_balance(asset, amount);
-                info!(user_id = %user_id, asset = ?asset, amount, "Deposit credited");
-                Ok(())
-            }
-            None => {
-                error!(user_id = %user_id, "Deposit failed — user not found");
-                Err("User not found".into())
-            }
+        if let Some(ref mut wal) = self.wal {
+            wal.append(WalOperation::Deposit { user_id, asset, amount })?;
         }
+        self.deposit_inner(user_id, asset, amount)
+    }
+
+    /// Places a new order into the engine.
+    #[instrument(skip(self, order), fields(user_id = %user_id, pair = %pair))]
+    pub fn add_order(
+        &mut self,
+        user_id: UserId,
+        pair: &TradingPair,
+        order: OrderPointer,
+    ) -> Result<Option<AddOrderResult>, String> {
+        // Generate ID and stamp it (normal mode only)
+        if !self.replay_mode {
+            let order_id = self.id_generator.next_id();
+            {
+                let mut o = order.lock().unwrap();
+                o.set_order_id(order_id);
+            }
+            debug!(order_id, "Assigned snowflake ID");
+        }
+
+        // WAL write — snapshot the Order (Copy) before mutation
+        if let Some(ref mut wal) = self.wal {
+            let order_snapshot = *order.lock().unwrap();
+            wal.append(WalOperation::PlaceOrder { pair: *pair, order: order_snapshot })?;
+        }
+
+        self.add_order_inner(user_id, pair, order)
+    }
+
+    /// Cancels a resting order.
+    #[instrument(skip(self))]
+    pub fn cancel_order(&mut self, pair: &TradingPair, order_id: &OrderId) -> bool {
+        if let Some(ref mut wal) = self.wal {
+            let _ = wal.append(WalOperation::CancelOrder { pair: *pair, order_id: *order_id });
+        }
+        self.cancel_order_inner(pair, order_id)
+    }
+
+    /// Modifies an existing order via cancel-replace.
+    ///
+    /// Writes a single `ModifyOrder` WAL entry, then delegates to `_inner` methods.
+    #[instrument(skip(self, modify_order), fields(order_id = modify_order.get_order_id()))]
+    pub fn modify_order(
+        &mut self,
+        pair: &TradingPair,
+        modify_order: OrderModify,
+    ) -> Option<AddOrderResult> {
+        let order_id = modify_order.get_order_id();
+        let user_id = modify_order.get_user_id();
+
+        let order_type = self
+            .orderbooks
+            .get(pair)?
+            .get_order_type(&order_id)?;
+
+        // Generate new ID (normal mode only)
+        let new_id = if self.replay_mode {
+            // During replay, use the ID that will come from add_order_inner
+            // For modify, we need to know the new_order's ID — but it's not set yet.
+            // In replay mode, add_order_inner uses the order's existing ID.
+            // Since we're about to create the order with a placeholder, we need to handle this.
+            // Actually, during replay the ModifyOrder entry already has the new_order with its real ID.
+            // So we should use that. But we're constructing new_order here...
+            // The solution: in replay mode, the modify_order is called from replay_entry
+            // which already passes the new_order from the WAL. So we never reach here in replay.
+            unreachable!("modify_order should not be called in replay mode — use replay_entry instead")
+        } else {
+            self.id_generator.next_id()
+        };
+
+        let new_order = Arc::new(Mutex::new(Order::new(
+            new_id,
+            order_type,
+            modify_order.get_side(),
+            modify_order.get_status(),
+            modify_order.get_price(),
+            modify_order.get_quantity(),
+            user_id,
+        )));
+
+        // WAL write — single entry for the whole modify
+        if let Some(ref mut wal) = self.wal {
+            let new_order_snapshot = *new_order.lock().unwrap();
+            let _ = wal.append(WalOperation::ModifyOrder {
+                pair: *pair,
+                old_order_id: order_id,
+                new_order: new_order_snapshot,
+            });
+        }
+
+        debug!(order_id, "Cancelling old order for modify");
+        self.cancel_order_inner(pair, &order_id);
+
+        debug!(old_order_id = order_id, new_order_id = new_id, "Placing new order for modify");
+        let result = self.add_order_inner(user_id, pair, new_order).ok()??;
+
+        info!(
+            old_order_id = order_id,
+            new_order_id = result.order_id,
+            trades = result.trades.as_ref().map_or(0, |t| t.len()),
+            "Order modified"
+        );
+        Some(result)
+    }
+
+    /// Returns a depth snapshot of the order book for the given pair.
+    pub fn get_order_info(&self, pair: &TradingPair) -> Option<OrderBookLevelInfo> {
+        self.orderbooks
+            .get(pair)
+            .map(|book: &OrderBook| book.get_order_info())
+    }
+
+    /// Returns the total number of resting orders for the given pair.
+    pub fn size(&self, pair: &TradingPair) -> Option<usize> {
+        self.orderbooks.get(pair).map(|book| book.size())
     }
 
     /// Returns a user's balances across all assets.
-    ///
-    /// Only includes assets with non-zero balance or locked amount.
-    /// Returns `HashMap<Asset, (available, locked)>`.
     pub fn get_user_balance(
         &self,
         user_id: &UserId,
@@ -192,34 +377,54 @@ impl Engine {
         Some(result)
     }
 
-    /// Places a new order into the engine.
-    ///
-    /// This is the main order placement flow:
-    ///
-    /// 1. **Generate ID** — assigns a snowflake ID via [`set_order_id`](Order::set_order_id)
-    /// 2. **Lock balance** — locks the required funds (quote for buys, base for sells)
-    /// 3. **Add to book** — inserts into the [`OrderBook`] and attempts matching
-    /// 4. **Settle fills** — stamps trade IDs/timestamps, updates user balances
-    /// 5. **Cleanup** — unlocks remaining balance for fully-filled or FAK orders
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(Some(AddOrderResult))` — order was placed (may include trades)
-    /// - `Ok(None)` — order was rejected (duplicate ID or unmatched FAK)
-    /// - `Err(msg)` — user not found, pair not found, insufficient balance, or overflow
-    #[instrument(skip(self, order), fields(user_id = %user_id, pair = %pair))]
-    pub fn add_order(
+    // =========================================================================
+    // Private _inner methods — core logic, no WAL writes
+    // =========================================================================
+
+    fn add_trading_pair_inner(&mut self, pair: TradingPair) {
+        self.orderbooks.entry(pair).or_insert(OrderBook::new());
+        info!(pair = %pair, "Trading pair added");
+    }
+
+    fn add_user_inner(&mut self, user: User) {
+        let id = user.get_user_id();
+        self.users.insert(id, user);
+        info!(user_id = %id, "User registered");
+    }
+
+    fn deposit_inner(
+        &mut self,
+        user_id: UserId,
+        asset: Asset,
+        amount: Quantity,
+    ) -> Result<(), String> {
+        let user = self.users.get_mut(&user_id);
+        match user {
+            Some(u) => {
+                u.add_balance(asset, amount);
+                info!(user_id = %user_id, asset = ?asset, amount, "Deposit credited");
+                Ok(())
+            }
+            None => {
+                error!(user_id = %user_id, "Deposit failed — user not found");
+                Err("User not found".into())
+            }
+        }
+    }
+
+    fn add_order_inner(
         &mut self,
         user_id: UserId,
         pair: &TradingPair,
         order: OrderPointer,
     ) -> Result<Option<AddOrderResult>, String> {
-        let order_id = self.id_generator.next_id();
-        {
-            let mut o = order.lock().unwrap();
-            o.set_order_id(order_id);
-        }
-        debug!(order_id, "Assigned snowflake ID");
+        let order_id = if self.replay_mode {
+            // During replay, use the order's existing ID (already set from WAL)
+            order.lock().unwrap().get_order_id()
+        } else {
+            // Normal mode: ID was already set by the public add_order method
+            order.lock().unwrap().get_order_id()
+        };
 
         let (side, price, quantity) = {
             let o = order.lock().unwrap();
@@ -343,15 +548,7 @@ impl Engine {
         }
     }
 
-    /// Cancels a resting order.
-    ///
-    /// Removes the order from the book and unlocks its balance.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the order was found and cancelled, `false` otherwise.
-    #[instrument(skip(self))]
-    pub fn cancel_order(&mut self, pair: &TradingPair, order_id: &OrderId) -> bool {
+    fn cancel_order_inner(&mut self, pair: &TradingPair, order_id: &OrderId) -> bool {
         let order = match self
             .orderbooks
             .get_mut(pair)
@@ -372,60 +569,5 @@ impl Engine {
         } else {
             true
         }
-    }
-
-    /// Modifies an existing order via cancel-replace.
-    ///
-    /// The old order is cancelled and a new one is created with a fresh snowflake ID.
-    /// The new order goes through the full placement flow (balance lock, matching, etc.).
-    #[instrument(skip(self, modify_order), fields(order_id = modify_order.get_order_id()))]
-    pub fn modify_order(
-        &mut self,
-        pair: &TradingPair,
-        modify_order: OrderModify,
-    ) -> Option<AddOrderResult> {
-        let order_id = modify_order.get_order_id();
-        let user_id = modify_order.get_user_id();
-
-        let order_type = self
-            .orderbooks
-            .get(pair)?
-            .get_order_type(&order_id)?;
-
-        debug!(order_id, "Cancelling old order for modify");
-        self.cancel_order(pair, &order_id);
-
-        let new_id = self.id_generator.next_id();
-        let new_order = Arc::new(Mutex::new(Order::new(
-            new_id,
-            order_type,
-            modify_order.get_side(),
-            modify_order.get_status(),
-            modify_order.get_price(),
-            modify_order.get_quantity(),
-            user_id,
-        )));
-        debug!(old_order_id = order_id, new_order_id = new_id, "Placement new order for modify");
-
-        let result = self.add_order(user_id, pair, new_order).ok()??;
-        info!(
-            old_order_id = order_id,
-            new_order_id = result.order_id,
-            trades = result.trades.as_ref().map_or(0, |t| t.len()),
-            "Order modified"
-        );
-        Some(result)
-    }
-
-    /// Returns a depth snapshot of the order book for the given pair.
-    pub fn get_order_info(&self, pair: &TradingPair) -> Option<OrderBookLevelInfo> {
-        self.orderbooks
-            .get(pair)
-            .map(|book: &OrderBook| book.get_order_info())
-    }
-
-    /// Returns the total number of resting orders for the given pair.
-    pub fn size(&self, pair: &TradingPair) -> Option<usize> {
-        self.orderbooks.get(pair).map(|book| book.size())
     }
 }
