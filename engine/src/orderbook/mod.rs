@@ -11,7 +11,7 @@
 //!
 //! When an incoming order arrives via [`add_order`](OrderBook::add_order):
 //!
-//! 1. Check if the order can match ([`can_match`](OrderBook::can_match)).
+//! 1. Check if the order can match (price is at or past the best opposite price).
 //! 2. Walk the opposite side from the best price inward.
 //! 3. At each level, match orders front-to-back (time priority).
 //! 4. Fill quantity = `min(incoming_remaining, resting_remaining)`.
@@ -54,13 +54,13 @@ use crate::{
 /// A price-time priority order book for a single trading pair.
 ///
 /// Contains both bid (buy) and ask (sell) sides, plus a flat lookup table
-/// ([`orders_map`](OrderBook::orders_map)) for O(1) order existence checks.
+/// (`orders_map: HashMap<OrderId, Order>`) for O(1) order existence checks.
 ///
 /// # Data Structures
 ///
 /// - `bids_map` — `BTreeMap<Price, VecDeque<Order>>` sorted ascending. Best bid is the **last** key.
 /// - `asks_map` — `BTreeMap<Price, VecDeque<Order>>` sorted ascending. Best ask is the **first** key.
-/// - `orders_map` — `HashMap<OrderId, Order>` for O(1) lookups by order ID.
+/// - `orders_map` — `HashMap<OrderId, Order>` for O(1) lookups by order ID (private).
 #[derive(Debug)]
 pub struct OrderBook {
     /// Buy orders keyed by price, sorted ascending (best bid = last key)
@@ -229,7 +229,7 @@ impl OrderBook {
     /// 1. Reject duplicate order IDs
     /// 2. Reject FAK orders that can't match immediately
     /// 3. Insert the order into the `orders_map` and the appropriate price level
-    /// 4. Attempt matching via [`match_order`](OrderBook::match_order)
+    /// 4. Attempt matching via the private `match_order` method
     ///
     /// # Arguments
     ///

@@ -7,3 +7,11 @@ run : build
 release : 
 	cargo build --release
 
+clean :
+	cargo clean
+
+doc :
+	cargo doc
+
+doc-open: 
+	cargo doc --open

@@ -32,9 +32,9 @@
 //! ## Order Lifecycle
 //!
 //! 1. Caller creates an `Order` with a placeholder ID (`0`).
-//! 2. [`Engine::add_order`] assigns a snowflake ID, locks the user's balance, and sends the order to the [`OrderBook`].
+//! 2. [`matching_engine::Engine::add_order`](crate::matching_engine::Engine::add_order) assigns a snowflake ID, locks the user's balance, and sends the order to the [`OrderBook`](crate::orderbook::OrderBook).
 //! 3. The orderbook attempts to match against resting orders (price-time priority).
-//! 4. Matches produce [`Trade`]s. The engine stamps real snowflake trade IDs and timestamps.
+//! 4. Matches produce [`Trade`](crate::trade::Trade)s. The engine stamps real snowflake trade IDs and timestamps.
 //! 5. Balances are updated: the aggressor's locked funds are converted, resting orders' locked funds are settled.
 //! 6. Unfilled FAK orders are cancelled after the matching pass.
 //!

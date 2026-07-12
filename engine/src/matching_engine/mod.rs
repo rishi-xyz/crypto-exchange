@@ -86,8 +86,8 @@ impl Engine {
     /// Creates a new engine with no pairs, no users, and a fresh ID generator.
     ///
     /// The ID generator is initialized with `machine_id=1, datacenter_id=1`.
-    /// For multi-instance deployments, pass different values via
-    /// [`new_with_config`](Engine::new_with_config) (not yet implemented).
+    /// For multi-instance deployments, you'd pass different `machine_id`/`datacenter_id`
+    /// values (not yet implemented).
     pub fn new() -> Self {
         Engine {
             orderbooks: HashMap::new(),
