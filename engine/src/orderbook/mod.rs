@@ -1,3 +1,30 @@
+//! Price-time priority order book for a single trading pair.
+//!
+//! The [`OrderBook`] maintains two sides — bids (buy orders) and asks (sell orders) —
+//! each organized as a `BTreeMap<Price, VecDeque<Order>>`. This gives us:
+//!
+//! - **Price priority** — `BTreeMap` keeps levels sorted; best bid is the max key,
+//!   best ask is the min key.
+//! - **Time priority** — `VecDeque` at each level is FIFO; oldest order matches first.
+//!
+//! # Matching Algorithm
+//!
+//! When an incoming order arrives via [`add_order`](OrderBook::add_order):
+//!
+//! 1. Check if the order can match ([`can_match`](OrderBook::can_match)).
+//! 2. Walk the opposite side from the best price inward.
+//! 3. At each level, match orders front-to-back (time priority).
+//! 4. Fill quantity = `min(incoming_remaining, resting_remaining)`.
+//! 5. Continue until the incoming order is fully filled or no more resting orders match.
+//! 6. After matching, any unfilled [`FillAndKill`](crate::types::OrderType::FillAndKill)
+//!    orders at the front of the book are cancelled.
+//!
+//! # Thread Safety
+//!
+//! Individual orders are `Arc<Mutex<Order>>`. The book itself is **not** `Sync` —
+//! it is owned by the [`Engine`](crate::matching_engine::Engine) which is wrapped
+//! in a `tokio::sync::RwLock` at the gRPC boundary.
+
 use std::{
     cmp::min, 
     collections::{
@@ -24,14 +51,28 @@ use crate::{
     }
 };
 
+/// A price-time priority order book for a single trading pair.
+///
+/// Contains both bid (buy) and ask (sell) sides, plus a flat lookup table
+/// ([`orders_map`](OrderBook::orders_map)) for O(1) order existence checks.
+///
+/// # Data Structures
+///
+/// - `bids_map` — `BTreeMap<Price, VecDeque<Order>>` sorted ascending. Best bid is the **last** key.
+/// - `asks_map` — `BTreeMap<Price, VecDeque<Order>>` sorted ascending. Best ask is the **first** key.
+/// - `orders_map` — `HashMap<OrderId, Order>` for O(1) lookups by order ID.
 #[derive(Debug)]
 pub struct OrderBook {
+    /// Buy orders keyed by price, sorted ascending (best bid = last key)
     bids_map: BTreeMap<Price, OrderPointers>,
+    /// Sell orders keyed by price, sorted ascending (best ask = first key)
     asks_map: BTreeMap<Price,OrderPointers>,
+    /// Flat lookup of all orders by ID (for existence checks and type lookups)
     orders_map: HashMap<OrderId, Order>
 }
 
 impl OrderBook {
+    /// Creates an empty order book.
     pub fn new() ->Self {
         let bids_map: BTreeMap<Price, OrderPointers> = BTreeMap::new();
         let asks_map: BTreeMap<Price, OrderPointers> = BTreeMap::new();
@@ -39,6 +80,12 @@ impl OrderBook {
         OrderBook { bids_map , asks_map, orders_map }
     }
 
+    /// Checks whether an incoming order can potentially match at the given price.
+    ///
+    /// - **Buy**: can match if `price >= best_ask`
+    /// - **Sell**: can match if `price <= best_bid`
+    ///
+    /// Returns `false` if the opposite side is empty.
     fn can_match(&self, side: Side, price: Price) ->bool {
         match side {
             Side::Buy => {
@@ -58,6 +105,15 @@ impl OrderBook {
         }
     }
 
+    /// Matches resting orders against the incoming aggressor order.
+    ///
+    /// Walks the opposite side from the best price inward, filling at each level.
+    /// Returns all trades produced. After matching, any unfilled FAK orders at
+    /// the front of the book are cancelled.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a mutex on an order is poisoned (should not happen in normal operation).
     fn match_order(&mut self) ->Trades {
         let mut trades:Trades = Trades::new();
         trades.reserve(self.orders_map.len()/2);
@@ -133,6 +189,18 @@ impl OrderBook {
         return trades
     }
     
+    /// Cancels a resting order by ID.
+    ///
+    /// Removes the order from both the price-level deque and the `orders_map`.
+    /// Returns the cancelled order, or `None` if not found.
+    ///
+    /// # Arguments
+    ///
+    /// * `order_id` — ID of the order to cancel
+    ///
+    /// # Returns
+    ///
+    /// The cancelled [`Order`], or `None` if the order didn't exist.
     pub fn cancel_order(&mut self,order_id: &OrderId) ->Option<Order> {
         let order = self.orders_map.remove(order_id)?;
         let price:Price = order.get_price();
@@ -154,6 +222,28 @@ impl OrderBook {
         Some(order)
     }
     
+    /// Adds an order to the book and attempts to match it.
+    ///
+    /// This is the main entry point for order placement. The flow:
+    ///
+    /// 1. Reject duplicate order IDs
+    /// 2. Reject FAK orders that can't match immediately
+    /// 3. Insert the order into the `orders_map` and the appropriate price level
+    /// 4. Attempt matching via [`match_order`](OrderBook::match_order)
+    ///
+    /// # Arguments
+    ///
+    /// * `order` — Thread-safe pointer to the order to add
+    ///
+    /// # Returns
+    ///
+    /// - `Some(trades)` — matching occurred, trades are returned (may be empty)
+    /// - `None` — order was rejected (duplicate ID or unmatched FAK)
+    ///
+    /// # Note
+    ///
+    /// Trade IDs and timestamps in the returned trades are placeholders (`0`).
+    /// The [`Engine`](crate::matching_engine::Engine) stamps real values afterward.
     pub fn add_order(&mut self,order: OrderPointer) ->Option<Trades> {
         let (order_id, order_type,order_side,order_price) = {
             let order = order.lock().unwrap();
@@ -175,6 +265,19 @@ impl OrderBook {
         Some(self.match_order())
     }
     
+    /// Modifies an existing order by cancel-replace.
+    ///
+    /// Cancels the old order and creates a new one with the parameters from
+    /// `order_modify`. The new order then goes through the full matching flow.
+    ///
+    /// # Arguments
+    ///
+    /// * `order_modify` — The modification request
+    ///
+    /// # Returns
+    ///
+    /// `Some(trades)` if the replacement order matched, `None` if the original
+    /// order didn't exist.
     pub fn modify_orders(&mut self,order_modify: OrderModify) ->Option<Trades> {
         let order_id = order_modify.get_order_id();
         if !self.orders_map.contains_key(&order_id){ return None};
@@ -195,18 +298,30 @@ impl OrderBook {
         self.add_order(new_order)
     }
     
+    /// Returns the total number of resting orders in the book.
     pub fn size(&self) -> usize  {
         return self.orders_map.len()
     }
 
+    /// Returns `true` if an order with the given ID exists in the book.
     pub fn has_order(&self, order_id: &OrderId) -> bool {
         self.orders_map.contains_key(order_id)
     }
 
+    /// Returns the order type for the given order ID, if it exists.
     pub fn get_order_type(&self, order_id: &OrderId) -> Option<OrderType> {
         self.orders_map.get(order_id).map(|o| o.get_type())
     }
     
+    /// Returns a depth snapshot of the order book.
+    ///
+    /// Aggregates all orders at each price level into a single [`LevelInfo`]
+    /// with the total remaining quantity. Used for market data feeds and
+    /// REST API orderbook endpoints.
+    ///
+    /// # Returns
+    ///
+    /// An [`OrderBookLevelInfo`] containing bid and ask levels with aggregated quantities.
     pub fn get_order_info(&self) ->OrderBookLevelInfo {
         let mut bids_info = VecDeque::new(); 
         let mut ask_info = VecDeque::new();

@@ -1,3 +1,19 @@
+//! # Matching Engine Demo
+//!
+//! End-to-end demonstration of the matching engine covering:
+//!
+//! 1. Basic partial fill (seller rests, buyer matches partially)
+//! 2. No match (buyer below best ask)
+//! 3. Full fill of remaining quantity
+//! 4. Order cancellation with balance unlock
+//! 5. Modify (cancel-replace) to trigger a match
+//! 6. FillAndKill — rejected when no match available
+//! 7. FillAndKill — matches fully
+//! 8. Multiple trading pairs (ETH-USDC + SOL-USDC)
+//! 9. Trading pair removal
+//!
+//! Run with `cargo run` from the `engine/` directory.
+
 use std::sync::{Arc, Mutex};
 
 use engine::{
