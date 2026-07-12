@@ -55,3 +55,4 @@ pub mod trading_pair;
 pub mod matching_engine;
 pub mod users;
 pub mod snowflake;
+pub mod logging;

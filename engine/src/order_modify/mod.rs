@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tracing::trace;
 
 use crate::{order::Order, types::{OrderId, OrderStatus, OrderType, Price, Quantity, Side, UserId}};
 
@@ -67,7 +68,8 @@ impl OrderModify {
         status: OrderStatus,
         user_id: UserId
     ) ->Self {
-        return Self { order_id, price, side, quantity, status, user_id };
+        trace!(order_id, price, side = ?side, quantity, user = %user_id, "Modify request created");
+        Self { order_id, price, side, quantity, status, user_id }
     }   
 
     /// Returns the ID of the order to be replaced.

@@ -33,6 +33,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use tracing::debug;
+
 /// Custom epoch in milliseconds (Nov 18, 2023 00:00:00 UTC).
 /// Timestamps are stored as milliseconds elapsed since this epoch.
 const EPOCH: u64 = 1_700_000_000_000;
@@ -106,8 +108,17 @@ impl SnowflakeGenerator {
     ///
     /// Panics if `machine_id > 31` or `datacenter_id > 31`.
     pub fn new(machine_id: u64, datacenter_id: u64) -> Self {
-        assert!(machine_id <= MAX_MACHINE_ID, "machine_id must be 0-{}", MAX_MACHINE_ID);
-        assert!(datacenter_id <= MAX_DATACENTER_ID, "datacenter_id must be 0-{}", MAX_DATACENTER_ID);
+        assert!(
+            machine_id <= MAX_MACHINE_ID,
+            "machine_id must be 0-{}",
+            MAX_MACHINE_ID
+        );
+        assert!(
+            datacenter_id <= MAX_DATACENTER_ID,
+            "datacenter_id must be 0-{}",
+            MAX_DATACENTER_ID
+        );
+        debug!(machine_id, datacenter_id, "Snowflake generator initialized");
         SnowflakeGenerator {
             machine_id,
             datacenter_id,

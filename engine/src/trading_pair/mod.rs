@@ -4,6 +4,7 @@
 //! For example, `ETH-USDC` means "trade ETH (base) for USDC (quote)".
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use crate::types::Asset;
 
@@ -39,5 +40,11 @@ impl TradingPair {
     /// * `quote` — The pricing currency
     pub fn new(base: Asset, quote: Asset) -> Self {
         TradingPair { base, quote }
+    }
+}
+
+impl fmt::Display for TradingPair {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}-{}", self.base, self.quote)
     }
 }

@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use tracing::{debug, trace, warn};
 use uuid::Uuid;
 
 use crate::types::{Asset, OrderId, Quantity, UserId};
@@ -71,8 +72,10 @@ impl User {
     ///
     /// * `user_id` — Optional UUID. If `None`, a random UUID v4 is generated.
     pub fn new(user_id: Option<UserId>) -> Self {
+        let id = user_id.unwrap_or(Uuid::new_v4());
+        trace!(user_id = %id, "User created");
         User {
-            id: user_id.unwrap_or(Uuid::new_v4()),
+            id,
             locked_orders: HashMap::new(),
             balances: HashMap::new(),
         }
@@ -88,7 +91,16 @@ impl User {
     /// * `asset` — The asset to credit
     /// * `amount` — Number of units to add
     pub fn add_balance(&mut self, asset: Asset, amount: Quantity) {
+        let prev = self.balances.get(&asset).copied().unwrap_or(0);
         *self.balances.entry(asset).or_insert(0) += amount;
+        debug!(
+            user = %self.id,
+            asset = ?asset,
+            amount,
+            previous = prev,
+            new_total = self.balances.get(&asset),
+            "Balance credited"
+        );
     }
 
     /// Returns the available (unlocked) balance for the given asset.
@@ -130,11 +142,28 @@ impl User {
         asset: Asset,
         amount: Quantity,
     ) -> Result<(), String> {
-        if self.get_available_balance(&asset) < amount {
+        let available = self.get_available_balance(&asset);
+        if available < amount {
+            warn!(
+                user = %self.id,
+                order_id,
+                asset = ?asset,
+                requested = amount,
+                available,
+                "Insufficient balance"
+            );
             return Err("Insufficient balance".into());
         }
         *self.balances.entry(asset).or_insert(0) -= amount;
-        self.locked_orders.insert(order_id, LockEntry { asset, amount });
+        self.locked_orders
+            .insert(order_id, LockEntry { asset, amount });
+        debug!(
+            user = %self.id,
+            order_id,
+            asset = ?asset,
+            amount,
+            "Funds locked"
+        );
         Ok(())
     }
 
@@ -155,6 +184,13 @@ impl User {
             .locked_orders
             .remove(order_id)
             .ok_or("Order not locked")?;
+        debug!(
+            user = %self.id,
+            order_id = %order_id,
+            asset = ?entry.asset,
+            amount = entry.amount,
+            "Funds unlocked"
+        );
         *self.balances.entry(entry.asset).or_insert(0) += entry.amount;
         Ok(())
     }
@@ -190,9 +226,23 @@ impl User {
             .get_mut(&order_id)
             .ok_or("Order not found in locked orders")?;
         if entry.asset != debit_asset {
+            warn!(
+                user = %self.id,
+                order_id,
+                expected = ?entry.asset,
+                got = ?debit_asset,
+                "Locked asset mismatch"
+            );
             return Err("Locked asset mismatch".into());
         }
         if entry.amount < debit_amount {
+            warn!(
+                user = %self.id,
+                order_id,
+                locked = entry.amount,
+                requested = debit_amount,
+                "Locked amount insufficient for fill"
+            );
             return Err("Locked amount insufficient for fill".into());
         }
         entry.amount -= debit_amount;
@@ -200,6 +250,15 @@ impl User {
             self.locked_orders.remove(&order_id);
         }
         *self.balances.entry(credit_asset).or_insert(0) += credit_amount;
+        debug!(
+            user = %self.id,
+            order_id,
+            debit = ?debit_asset,
+            debit_amount,
+            credit = ?credit_asset,
+            credit_amount,
+            "Fill settled"
+        );
         Ok(())
     }
 

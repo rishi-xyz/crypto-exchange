@@ -29,6 +29,8 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use tracing::{debug, error, info, instrument, warn};
+
 use crate::{
     level_info::OrderBookLevelInfo,
     order::{Order, OrderPointer},
@@ -89,6 +91,7 @@ impl Engine {
     /// For multi-instance deployments, you'd pass different `machine_id`/`datacenter_id`
     /// values (not yet implemented).
     pub fn new() -> Self {
+        info!("Engine initialized");
         Engine {
             orderbooks: HashMap::new(),
             users: HashMap::new(),
@@ -100,82 +103,73 @@ impl Engine {
     ///
     /// Creates an empty [`OrderBook`] for the pair. Orders can only be placed
     /// after the pair has been registered.
-    ///
-    /// # Arguments
-    ///
-    /// * `pair` — The trading pair to add (e.g. `TradingPair::new(Asset::ETH, Asset::USDC)`)
+    #[instrument(skip(self))]
     pub fn add_trading_pair(&mut self, pair: TradingPair) {
         self.orderbooks.entry(pair).or_insert(OrderBook::new());
+        info!(pair = %pair, "Trading pair added");
     }
 
     /// Removes a trading pair and its entire orderbook.
     ///
     /// All resting orders in the book are lost. In production, you'd want
     /// to cancel all orders and unlock their balances first.
-    ///
-    /// # Returns
-    ///
-    /// The removed [`OrderBook`], or `None` if the pair didn't exist.
+    #[instrument(skip(self))]
     pub fn remove_trading_pair(&mut self, pair: &TradingPair) -> Option<OrderBook> {
-        self.orderbooks.remove(pair)
+        let removed = self.orderbooks.remove(pair);
+        info!(pair = %pair, removed = removed.is_some(), "Trading pair removed");
+        removed
     }
 
     /// Registers a new user in the engine.
     ///
     /// The user must already have a UUID (from [`User::new`]).
+    #[instrument(skip(self, user), fields(user_id = %user.get_user_id()))]
     pub fn add_user(&mut self, user: User) {
         let id = user.get_user_id();
         self.users.insert(id, user);
+        info!(user_id = %id, "User registered");
     }
 
     /// Removes a user from the engine.
-    ///
-    /// # Returns
-    ///
-    /// The removed [`User`], or `None` if the user didn't exist.
+    #[instrument(skip(self))]
     pub fn remove_user(&mut self, user_id: &UserId) -> Option<User> {
-        self.users.remove(user_id)
+        let removed = self.users.remove(user_id);
+        info!(user_id = %user_id, removed = removed.is_some(), "User removed");
+        removed
     }
 
     /// Credits a user's balance for the given asset.
     ///
     /// Called by the Go API layer after a blockchain deposit is confirmed.
     ///
-    /// # Arguments
-    ///
-    /// * `user_id` — UUID of the user to credit
-    /// * `asset` — The asset to deposit (e.g. `Asset::USDC`)
-    /// * `amount` — Number of units to credit
-    ///
     /// # Errors
     ///
     /// Returns `Err("User not found")` if the user doesn't exist.
+    #[instrument(skip(self), fields(user_id = %user_id))]
     pub fn deposit(
         &mut self,
         user_id: UserId,
         asset: Asset,
         amount: Quantity,
     ) -> Result<(), String> {
-        self.users
-            .get_mut(&user_id)
-            .ok_or("User not found")?
-            .add_balance(asset, amount);
-        Ok(())
+        let user = self.users.get_mut(&user_id);
+        match user {
+            Some(u) => {
+                u.add_balance(asset, amount);
+                info!(user_id = %user_id, asset = ?asset, amount, "Deposit credited");
+                Ok(())
+            }
+            None => {
+                error!(user_id = %user_id, "Deposit failed — user not found");
+                Err("User not found".into())
+            }
+        }
     }
 
     /// Returns a user's balances across all assets.
     ///
     /// Only includes assets with non-zero balance or locked amount.
     /// Returns `HashMap<Asset, (available, locked)>`.
-    ///
-    /// # Arguments
-    ///
-    /// * `user_id` — UUID of the user to query
-    ///
-    /// # Returns
-    ///
-    /// `Some(map)` if the user exists, `None` otherwise. Each entry is
-    /// `(available_balance, locked_amount)` for the asset.
     pub fn get_user_balance(
         &self,
         user_id: &UserId,
@@ -208,36 +202,12 @@ impl Engine {
     /// 4. **Settle fills** — stamps trade IDs/timestamps, updates user balances
     /// 5. **Cleanup** — unlocks remaining balance for fully-filled or FAK orders
     ///
-    /// # Arguments
-    ///
-    /// * `user_id` — UUID of the user placing the order
-    /// * `pair` — The trading pair (must be registered)
-    /// * `order` — Thread-safe pointer to the order (ID is overwritten by the engine)
-    ///
     /// # Returns
     ///
     /// - `Ok(Some(AddOrderResult))` — order was placed (may include trades)
     /// - `Ok(None)` — order was rejected (duplicate ID or unmatched FAK)
     /// - `Err(msg)` — user not found, pair not found, insufficient balance, or overflow
-    ///
-    /// # Balance Locking
-    ///
-    /// For **buy** orders: locks `price × quantity` units of the quote asset.
-    /// For **sell** orders: locks `quantity` units of the base asset.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let order = Arc::new(Mutex::new(Order::new(
-    ///     0, OrderType::GoodTillCancel, Side::Buy, OrderStatus::Empty,
-    ///     50000, 10, user_id,
-    /// )));
-    /// let result = engine.add_order(user_id, &pair, order)?;
-    /// if let Some(r) = result {
-    ///     println!("Order {} placed, {} trades", r.order_id,
-    ///         r.trades.as_ref().map_or(0, |t| t.len()));
-    /// }
-    /// ```
+    #[instrument(skip(self, order), fields(user_id = %user_id, pair = %pair))]
     pub fn add_order(
         &mut self,
         user_id: UserId,
@@ -249,6 +219,7 @@ impl Engine {
             let mut o = order.lock().unwrap();
             o.set_order_id(order_id);
         }
+        debug!(order_id, "Assigned snowflake ID");
 
         let (side, price, quantity) = {
             let o = order.lock().unwrap();
@@ -271,7 +242,15 @@ impl Engine {
 
         {
             let user = self.users.get_mut(&user_id).ok_or("User not found")?;
-            user.lock(order_id, lock_asset, lock_amount)?;
+            match user.lock(order_id, lock_asset, lock_amount) {
+                Ok(()) => {
+                    debug!(order_id, lock_asset = ?lock_asset, lock_amount, "Balance locked");
+                }
+                Err(e) => {
+                    warn!(order_id, error = %e, "Balance lock failed");
+                    return Err(e);
+                }
+            }
         }
 
         let book = self
@@ -333,12 +312,32 @@ impl Engine {
                     }
                 }
 
+                info!(
+                    order_id,
+                    trades_count = trades.len(),
+                    "Order matched"
+                );
+
+                for trade in &trades {
+                    let bid = trade.get_bid_trade_info();
+                    let ask = trade.get_ask_trade_info();
+                    debug!(
+                        trade_id = trade.get_trade_id(),
+                        bid_order = bid.get_order_id(),
+                        ask_order = ask.get_order_id(),
+                        price = bid.get_price(),
+                        quantity = bid.get_quantity(),
+                        "Trade settled"
+                    );
+                }
+
                 Ok(Some(AddOrderResult { order_id, trades: Some(trades) }))
             }
             None => {
                 if let Some(user) = self.users.get_mut(&user_id) {
                     let _ = user.unlock_order(&order_id);
                 }
+                debug!(order_id, "Order rested in book (no match)");
                 Ok(None)
             }
         }
@@ -348,14 +347,10 @@ impl Engine {
     ///
     /// Removes the order from the book and unlocks its balance.
     ///
-    /// # Arguments
-    ///
-    /// * `pair` — The trading pair the order belongs to
-    /// * `order_id` — ID of the order to cancel
-    ///
     /// # Returns
     ///
     /// `true` if the order was found and cancelled, `false` otherwise.
+    #[instrument(skip(self))]
     pub fn cancel_order(&mut self, pair: &TradingPair, order_id: &OrderId) -> bool {
         let order = match self
             .orderbooks
@@ -363,12 +358,17 @@ impl Engine {
             .and_then(|book| book.cancel_order(order_id))
         {
             Some(order) => order,
-            None => return false,
+            None => {
+                debug!(order_id = %order_id, pair = %pair, "Cancel failed — order not found");
+                return false;
+            }
         };
 
         let uid = order.get_user_id();
         if let Some(user) = self.users.get_mut(&uid) {
-            user.unlock_order(order_id).is_ok()
+            let result = user.unlock_order(order_id).is_ok();
+            info!(order_id = %order_id, pair = %pair, user_id = %uid, cancelled = result, "Order cancelled");
+            result
         } else {
             true
         }
@@ -378,16 +378,7 @@ impl Engine {
     ///
     /// The old order is cancelled and a new one is created with a fresh snowflake ID.
     /// The new order goes through the full placement flow (balance lock, matching, etc.).
-    ///
-    /// # Arguments
-    ///
-    /// * `pair` — The trading pair
-    /// * `modify_order` — The modification request (new price, quantity, etc.)
-    ///
-    /// # Returns
-    ///
-    /// `Some(AddOrderResult)` if the replacement was placed, `None` if the
-    /// original order didn't exist.
+    #[instrument(skip(self, modify_order), fields(order_id = modify_order.get_order_id()))]
     pub fn modify_order(
         &mut self,
         pair: &TradingPair,
@@ -401,6 +392,7 @@ impl Engine {
             .get(pair)?
             .get_order_type(&order_id)?;
 
+        debug!(order_id, "Cancelling old order for modify");
         self.cancel_order(pair, &order_id);
 
         let new_id = self.id_generator.next_id();
@@ -413,14 +405,19 @@ impl Engine {
             modify_order.get_quantity(),
             user_id,
         )));
+        debug!(old_order_id = order_id, new_order_id = new_id, "Placement new order for modify");
 
-        self.add_order(user_id, pair, new_order).ok()?
+        let result = self.add_order(user_id, pair, new_order).ok()??;
+        info!(
+            old_order_id = order_id,
+            new_order_id = result.order_id,
+            trades = result.trades.as_ref().map_or(0, |t| t.len()),
+            "Order modified"
+        );
+        Some(result)
     }
 
     /// Returns a depth snapshot of the order book for the given pair.
-    ///
-    /// Contains aggregated bid and ask levels with total quantities.
-    /// Used for REST API endpoints and WebSocket market data feeds.
     pub fn get_order_info(&self, pair: &TradingPair) -> Option<OrderBookLevelInfo> {
         self.orderbooks
             .get(pair)
@@ -428,8 +425,6 @@ impl Engine {
     }
 
     /// Returns the total number of resting orders for the given pair.
-    ///
-    /// Returns `None` if the pair doesn't exist.
     pub fn size(&self, pair: &TradingPair) -> Option<usize> {
         self.orderbooks.get(pair).map(|book| book.size())
     }

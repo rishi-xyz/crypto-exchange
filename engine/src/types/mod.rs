@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use std::fmt;
+
 /// Price of an order in the smallest quote-unit (e.g. cents for USDC).
 ///
 /// Using `i32` allows negative prices to be rejected at the type level
@@ -94,4 +96,16 @@ pub enum Asset {
     USDC,
     /// Tether (stablecoin)
     USDT,
+}
+
+impl fmt::Display for Asset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Asset::ETH => write!(f, "ETH"),
+            Asset::SOL => write!(f, "SOL"),
+            Asset::BTC => write!(f, "BTC"),
+            Asset::USDC => write!(f, "USDC"),
+            Asset::USDT => write!(f, "USDT"),
+        }
+    }
 }

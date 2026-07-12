@@ -8,6 +8,7 @@
 use std::{collections::VecDeque, sync::Arc};
 
 use serde::{Deserialize, Serialize};
+use tracing::trace;
 
 use crate::types::{OrderId, Price, Quantity, TradeId, UserId};
 
@@ -109,7 +110,8 @@ impl Trade {
     /// * `ask_trade` — Trade info for the sell side
     pub fn new(trade_id: TradeId, timestamp: u64, bid_trade: TradeInfoPointer, ask_trade: TradeInfoPointer) 
     ->Self {
-        return Trade { trade_id, timestamp, bid_trade, ask_trade };
+        trace!(trade_id, "Trade created");
+        Trade { trade_id, timestamp, bid_trade, ask_trade }
     }
 
     /// Returns the snowflake trade ID.
@@ -124,6 +126,7 @@ impl Trade {
 
     /// Overwrites the trade ID. Called by the engine to stamp the real snowflake ID.
     pub fn set_trade_id(&mut self, id: TradeId) {
+        trace!(old_id = self.trade_id, new_id = id, "Trade ID stamped");
         self.trade_id = id;
     }
 

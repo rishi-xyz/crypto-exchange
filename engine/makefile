@@ -15,3 +15,6 @@ doc :
 
 doc-open: 
 	cargo doc --open
+
+tests :
+	cargo run tests

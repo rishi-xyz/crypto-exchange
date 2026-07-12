@@ -18,6 +18,7 @@
 
 use std::{collections::VecDeque, sync::{Arc, Mutex}, time::{SystemTime, UNIX_EPOCH}};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, trace, warn};
 
 use crate::types::{OrderId, OrderStatus, OrderType, Price, Quantity, Side, UserId};
 
@@ -93,17 +94,27 @@ impl Order {
         quantity: Quantity,
         user_id: UserId
     ) ->Self {
-        return Self { 
-            order_id, 
-            order_type, 
-            side, 
-            status, 
-            price, 
-            initial_quantity: (quantity) , 
-            remaining_quantity: (quantity), 
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64,
-            user_id
-        };
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+        trace!(
+            order_id,
+            order_type = ?order_type,
+            side = ?side,
+            price,
+            quantity,
+            user = %user_id,
+            "Order created"
+        );
+        Self {
+            order_id,
+            order_type,
+            side,
+            status,
+            price,
+            initial_quantity: quantity,
+            remaining_quantity: quantity,
+            timestamp: ts,
+            user_id,
+        }
     }
     
     /// Returns the snowflake order ID.
@@ -175,19 +186,32 @@ impl Order {
     /// assert_eq!(order.get_remaining_quantity(), 5);
     /// assert_eq!(order.get_status(), OrderStatus::PartiallyFilled);
     /// ```
-    pub fn fills(&mut self,quantity: Quantity) ->Result<(),String> {
+    pub fn fills(&mut self, quantity: Quantity) -> Result<(), String> {
         if quantity > self.get_remaining_quantity() {
-            return  Err(format!(
+            warn!(
+                order_id = self.order_id,
+                fill_qty = quantity,
+                remaining = self.remaining_quantity,
+                "Overfill attempt"
+            );
+            return Err(format!(
                 "Order ({}) cannot be filled for more than its remaining quantity",
                 self.get_order_id()
             ));
         }
         self.remaining_quantity -= quantity;
         if self.remaining_quantity == 0 {
-            self.status = OrderStatus::Filled;    
-        }else {
-            self.status = OrderStatus::PartiallyFilled;   
+            self.status = OrderStatus::Filled;
+        } else {
+            self.status = OrderStatus::PartiallyFilled;
         }
+        debug!(
+            order_id = self.order_id,
+            fill_qty = quantity,
+            remaining = self.remaining_quantity,
+            status = ?self.status,
+            "Fill applied"
+        );
         Ok(())
     }
 
@@ -207,6 +231,7 @@ impl Order {
     /// to assign the real engine-generated ID. This replaces the placeholder `0`
     /// that was passed to [`new`](Order::new).
     pub fn set_order_id(&mut self, id: OrderId) {
+        trace!(old_id = self.order_id, new_id = id, "Order ID stamped");
         self.order_id = id;
     }
 }

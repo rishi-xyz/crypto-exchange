@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 use engine::{
     matching_engine::Engine,
@@ -8,6 +8,14 @@ use engine::{
     types::{Asset, OrderStatus, OrderType, Side, UserId},
     users::User,
 };
+
+static INIT: Once = Once::new();
+
+fn init_test_logging() {
+    INIT.call_once(|| {
+        engine::logging::init_test();
+    });
+}
 
 const USER_A: &str = "00000000-0000-0000-0000-000000000001";
 const USER_B: &str = "00000000-0000-0000-0000-000000000002";
@@ -21,6 +29,7 @@ fn user_b() -> UserId {
 }
 
 fn setup(pair: TradingPair) -> (Engine, TradingPair) {
+    init_test_logging();
     let mut engine = Engine::new();
     engine.add_trading_pair(pair);
     engine.add_user(User::new(Some(user_a())));
